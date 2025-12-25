@@ -1,0 +1,9 @@
+customtkinter
+matplotlib
+pymongo
+redis
+neo4j
+networkx
+tksheet
+cassandra-driver
+
