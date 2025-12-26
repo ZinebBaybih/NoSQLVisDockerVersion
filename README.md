@@ -1,3 +1,33 @@
+<h1 align="center">NOSQLVIS</h1>
+
+<p align="center">
+  <em>A Unified Visualization and Exploration Platform for Heterogeneous NoSQL Datastores</em>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/github/last-commit/UserLadid/NoSQLVis?style=flat-square" />
+  <img src="https://img.shields.io/github/issues/UserLadid/NoSQLVis?style=flat-square" />
+  <img src="https://img.shields.io/github/license/UserLadid/NoSQLVis?style=flat-square" />
+</p>
+
+
+<p align="center">
+  <strong>Built with the tools and technologies:</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-blue?style=flat-square&logo=python&logoColor=white" />
+  <img src="https://img.shields.io/badge/Tkinter-orange?style=flat-square" />
+  <img src="https://img.shields.io/badge/CustomTkinter-orange?style=flat-square" />
+  <img src="https://img.shields.io/badge/Cassandra-blue?style=flat-square&logo=cassandra&logoColor=white" />
+  <img src="https://img.shields.io/badge/Redis-red?style=flat-square&logo=redis&logoColor=white" />
+  <img src="https://img.shields.io/badge/MongoDB-green?style=flat-square&logo=mongodb&logoColor=white" />
+  <img src="https://img.shields.io/badge/Neo4j-blue?style=flat-square&logo=neo4j&logoColor=white" />
+</p>
+
+
+
+
 **NoSQL Vis**
 
 NoSQL Vis is a lightweight, extensible desktop application for interactive exploration, querying, and visualization of NoSQL databases. It provides a unified graphical interface that abstracts database-specific query languages and heterogeneous data models, enabling users to inspect and analyze data efficiently across multiple NoSQL systems.
