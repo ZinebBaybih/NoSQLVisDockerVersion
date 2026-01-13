@@ -10,7 +10,6 @@
   <img src="https://img.shields.io/github/license/UserLadid/NoSQLVis?style=flat-square" />
 </p>
 
-
 <p align="center">
   <strong>Built with the tools and technologies:</strong>
 </p>
@@ -25,13 +24,9 @@
   <img src="https://img.shields.io/badge/Neo4j-blue?style=flat-square&logo=neo4j&logoColor=white" />
 </p>
 
-
-
-
 **NoSQL Vis**
 
 NoSQL Vis is a lightweight, extensible desktop application for interactive exploration, querying, and visualization of NoSQL databases. It provides a unified graphical interface that abstracts database-specific query languages and heterogeneous data models, enabling users to inspect and analyze data efficiently across multiple NoSQL systems.
-
 
 **Features**
 
@@ -57,7 +52,6 @@ Export of query results for external analysis
 
 Desktop-based application with a focus on usability and extensibility
 
-
 **Supported Databases**
 
 NoSQL Vis currently supports representative systems from each major NoSQL category:
@@ -71,7 +65,6 @@ NoSQL Vis currently supports representative systems from each major NoSQL catego
     - Neo4j (Graph)
 
 The architecture is designed to allow additional NoSQL backends to be integrated with minimal effort.
-
 
 **Architecture Overview**
 
@@ -87,28 +80,34 @@ NoSQL Vis follows a modular architecture consisting of:
 
 This design ensures backend independence and consistent user experience across different database types.
 
-
 **Installation**
 
 Requirements
 
     - Python 3.9 or newer
-    - Supported NoSQL databases (running locally or remotely)
+    - Docker
 
 Clone the repository
-    git clone https://github.com/UserLadid/NoSQLVis.git
-    cd NoSQLVis
+git clone https://github.com/UserLadid/NoSQLVis.git
+cd NoSQLVis
 
 Install dependencies
-    pip install -r requirements.txt
+pip install -r requirements.txt
+
+## Docker Deployment
+
+NoSQL Vis can be launched using Docker and Docker Compose, including all required NoSQL databases.
+
+### Launch the application
+
+From the project root, run:
+
+```bash
+docker-compose up --build
+
 
 
 **Usage**
-
-Start the application using:
-
-python main.py
-
 
 From the interface, users can:
 
@@ -134,3 +133,4 @@ If you use NoSQL Vis in academic work, please cite the corresponding SoftwareX p
 **Contact**
 
 For questions, feedback, or collaboration inquiries, please contact the project maintainers via GitHub issues.
+```

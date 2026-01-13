@@ -116,7 +116,8 @@ class ConnectionController:
             backend = NoSQLBackend(db_type=db_type, host=host, port=port, user=user, password=pwd)
             backend.connect()
         except Exception as e:
-            self.conn_tab.after(0, lambda: self.status_label.configure(text=f"Error: {e}", fg_color="red"))
+            error_msg = str(e)
+            self.conn_tab.after(0, lambda msg=error_msg: self.status_label.configure(text=f"Error: {msg}", fg_color="red"))
             return
 
         # Once connected, **schedule all GUI updates on the main thread**
