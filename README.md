@@ -103,7 +103,7 @@ docker-compose up –build
 and do : run app/main.py
 
     - NOTE: For NEO4J datbase:
-      User : Neo4j and Password : password
+      User : neo4j and Password : password
 
 **Usage**
 
