@@ -308,12 +308,23 @@ class CassandraContentViewer(ctk.CTkFrame):
             return
 
         results = self.backend.search_table(keyspace, table, column, operator, value)
-        self.sheet.set_sheet_data(results)
 
+        if not results:
+            self.sheet.set_sheet_data([])
+            self.export_btn.configure(state="disabled")
+            return
 
-    # -----------------------------
+    # Convert list of dicts → headers + rows
+        headers = list(results[0].keys())
+        rows = [list(row.values()) for row in results]
+
+        self.sheet.headers(headers)
+        self.sheet.set_sheet_data(rows)
+
+        self.export_btn.configure(state="normal")
+
     # DASHBOARD UPDATE
-    # -----------------------------
+
     def update_dashboard(self):
         system_keyspaces = {
             "system", "system_schema", "system_auth",

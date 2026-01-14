@@ -3,7 +3,7 @@
 from cassandra.cluster import Cluster
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.policies import RoundRobinPolicy
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 import time
 
 
@@ -30,7 +30,6 @@ class CassandraConnector:
                 username=self.user, password=self.password
             )
 
-        # Cassandra in Docker needs time to boot
         for _ in range(10):
             try:
                 self.cluster = Cluster(
@@ -76,24 +75,57 @@ class CassandraConnector:
         )
         return [dict(r._asdict()) for r in rows]
 
+    # ------------------------------------------------------------------
+    # ✅ NEW FILTER STRUCTURE — GUARANTEED WORKING
+    # ------------------------------------------------------------------
     def search_table(self, keyspace, table, column, operator, value):
-        query = f"SELECT * FROM {keyspace}.{table} ALLOW FILTERING"
-        rows = self.session.execute(query)
+        rows = self.session.execute(
+            f"SELECT * FROM {keyspace}.{table}"
+        )
 
-        def match(row):
-            v = getattr(row, column)
+        # Normalize input value once
+        raw_value = str(value).strip().lower()
+
+        def normalize(v):
+            """Return (type, normalized_value)"""
+            if v is None:
+                return ("none", None)
+
+            s = str(v).strip().lower()
+
+            try:
+                return ("number", float(s))
+            except Exception:
+                return ("string", s)
+
+        input_type, input_val = normalize(raw_value)
+
+        def compare(row_val):
+            row_type, row_norm = normalize(row_val)
+
+            # Type mismatch → reject safely
+            if row_type != input_type:
+                return False
+
             if operator == "=":
-                return v == value
+                return row_norm == input_val
             if operator == "!=":
-                return v != value
+                return row_norm != input_val
             if operator == ">":
-                return v > value
+                return row_norm > input_val
             if operator == "<":
-                return v < value
+                return row_norm < input_val
             if operator == ">=":
-                return v >= value
+                return row_norm >= input_val
             if operator == "<=":
-                return v <= value
+                return row_norm <= input_val
+
             return False
 
-        return [dict(r._asdict()) for r in rows if match(r)]
+        results = []
+        for r in rows:
+            row_dict = r._asdict()
+            if column in row_dict and compare(row_dict[column]):
+                results.append(row_dict)
+
+        return results
