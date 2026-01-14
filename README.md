@@ -103,7 +103,11 @@ NoSQL Vis can be launched using Docker and Docker Compose, including all require
 From the project root, run:
 
 ```bash
-docker-compose up --build
+docker compose down -v
+docker system prune -af
+docker compose pull
+docker-compose up –build
+and do : run app/main.py
 
 
 
