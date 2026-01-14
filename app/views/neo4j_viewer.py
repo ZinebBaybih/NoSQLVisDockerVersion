@@ -17,7 +17,6 @@ class Neo4jContentViewer(ctk.CTkFrame):
 
         self.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # ---------------- Header ----------------
         header = ctk.CTkLabel(self, text="Neo4j Content Viewer", font=("Arial", 22, "bold"), fg_color="#ffffff", text_color="#191919")
         header.pack(pady=10)
 
@@ -52,7 +51,6 @@ class Neo4jContentViewer(ctk.CTkFrame):
         self.labels_tree.pack(fill="x", pady=5)
         self.labels_tree.bind("<Double-1>", self.on_label_double_click)
 
-        # ---------------- Action Buttons ----------------
         btn_frame = ctk.CTkFrame(self, fg_color="#ffffff")
         btn_frame.pack(fill="x", pady=10)
 
@@ -71,31 +69,34 @@ class Neo4jContentViewer(ctk.CTkFrame):
 
         self.show_labels()
 
-    # ============================================================
-    # DISPLAY LABELS
-    # ============================================================
+
     def show_labels(self):
         """Fetch and display label statistics (nodes + relations)."""
         for i in self.labels_tree.get_children():
             self.labels_tree.delete(i)
 
         try:
-            labels = self.backend.client.list_databases()  # Labels
+            labels = self.backend.client.list_databases()
+
             for lbl in labels:
                 label_name = lbl["name"]
                 node_count = lbl["count"]
+
                 try:
                     rels = self.backend.client.list_relationships(label_name)
                     rel_count = len(rels)
                 except Exception:
                     rel_count = 0
-                self.labels_tree.insert("", "end", values=(label_name, node_count, rel_count))
+
+                self.labels_tree.insert(
+                    "", "end",
+                    values=(label_name, node_count, rel_count)
+                )
+
         except Exception as e:
             messagebox.showerror("Erreur", f"Impossible de charger les labels:\n{e}")
 
-    # ============================================================
-    # NODES
-    # ============================================================
+
     def on_label_double_click(self, event):
         """When user double-clicks a label, show its nodes."""
         selected = self.labels_tree.focus()
@@ -136,9 +137,6 @@ class Neo4jContentViewer(ctk.CTkFrame):
         for n in nodes:
             self.nodes_tree.insert("", "end", values=[n.get(c, "") for c in columns])
 
-    # ============================================================
-    # EXPORT CSV
-    # ============================================================
     def export_label(self):
         if not self.selected_label:
             return
@@ -166,13 +164,12 @@ class Neo4jContentViewer(ctk.CTkFrame):
         except Exception as e:
             messagebox.showerror("Erreur", f"Erreur d’export: {e}")
 
-    # ============================================================
-    # GRAPH VISUALIZATION
-    # ============================================================
+
     def show_graph(self):
-        """Visualize label as graph with relationship counts."""
+        """Visualize label as graph with readable nodes and colors."""
         if not self.selected_label:
             return
+
         try:
             rels = self.backend.client.list_relationships(self.selected_label)
             if not rels:
@@ -180,31 +177,87 @@ class Neo4jContentViewer(ctk.CTkFrame):
                 return
 
             G = nx.DiGraph()
+
+            node_labels = {}
+            node_colors = []
+            color_map = {}
+
+            palette = [
+                "#66c2a5", "#fc8d62", "#8da0cb",
+                "#e78ac3", "#a6d854", "#ffd92f"
+            ]
+
+            def get_color(label):
+                if label not in color_map:
+                    color_map[label] = palette[len(color_map) % len(palette)]
+                return color_map[label]
+
             for record in rels:
                 n = record["n"]
                 m = record["m"]
                 r = record["r"]
-                G.add_edge(str(n.id), str(m.id), label=r.type)
 
-            plt.figure(figsize=(7, 6))
-            pos = nx.spring_layout(G, k=0.5, iterations=30)
-            node_sizes = [400 + 50 * G.degree(n) for n in G.nodes()]
-            node_colors = ["#66ccff" if G.degree(n) < 3 else "#ffaa00" for n in G.nodes()]
+                # ---- Node labels ----
+                n_label = list(n.labels)[0] if n.labels else "Node"
+                m_label = list(m.labels)[0] if m.labels else "Node"
+
+                n_name = n.get("name") or f"{n_label}_{n.id}"
+                m_name = m.get("name") or f"{m_label}_{m.id}"
+
+                # ---- Add nodes ----
+                G.add_node(n_name, label=n_label)
+                G.add_node(m_name, label=m_label)
+
+                # ---- Add edge ----
+                G.add_edge(n_name, m_name, label=r.type)
+
+            # ---- Layout (stable) ----
+            pos = nx.spring_layout(G, seed=42, k=2.2 , iterations=80)
+
+            # ---- Node colors by label ----
+            for node in G.nodes():
+                label = G.nodes[node]["label"]
+                node_colors.append(get_color(label))
+
+            plt.figure(figsize=(9, 7))
 
             nx.draw(
-                G, pos, with_labels=True, node_size=node_sizes,
-                node_color=node_colors, font_size=8, font_weight="bold"
+                G,
+                pos,
+                with_labels=True,
+                node_color=node_colors,
+                node_size=1600,
+                font_size=7,
+                font_weight="bold",
+                edgecolors="black"
             )
-            nx.draw_networkx_edge_labels(G, pos, edge_labels=nx.get_edge_attributes(G, "label"))
-            plt.title(f"Graph — Label: {self.selected_label} ({len(G.nodes())} nodes / {len(G.edges())} rels)")
+
+            # ---- Relationship labels ----
+            edge_labels = nx.get_edge_attributes(G, "label")
+            nx.draw_networkx_edge_labels(
+                G,
+                pos,
+                edge_labels=edge_labels,
+                font_size=6
+            )
+
+            # ---- Legend ----
+            legend_handles = [
+                plt.Line2D([0], [0], marker='o', color='w',
+                        markerfacecolor=color, markersize=10, label=lbl)
+                for lbl, color in color_map.items()
+            ]
+            plt.legend(handles=legend_handles, title="Node Labels")
+
+            plt.title(f"Graph — {self.selected_label}")
+            plt.axis("off")
+            plt.tight_layout()
             plt.show()
 
         except Exception as e:
             messagebox.showerror("Erreur", f"Erreur show_graph: {e}")
 
-    # ============================================================
-    # BACK
-    # ============================================================
+
     def go_back(self):
         self.selected_label = None
         self.nodes_tree.delete(*self.nodes_tree.get_children())
