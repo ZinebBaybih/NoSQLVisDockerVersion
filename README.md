@@ -87,8 +87,6 @@ Requirements
     - Python 3.9 or newer
     - Docker
 
-
-
 ## Docker Deployment
 
 NoSQL Vis can be launched using Docker and Docker Compose, including all required NoSQL databases.
@@ -104,7 +102,8 @@ docker compose pull
 docker-compose up –build
 and do : run app/main.py
 
-
+    - NOTE: For NEO4J datbase:
+      User : Neo4j and Password : password
 
 **Usage**
 
