@@ -87,12 +87,7 @@ Requirements
     - Python 3.9 or newer
     - Docker
 
-Clone the repository
-git clone https://github.com/UserLadid/NoSQLVis.git
-cd NoSQLVis
 
-Install dependencies
-pip install -r requirements.txt
 
 ## Docker Deployment
 
@@ -103,7 +98,11 @@ NoSQL Vis can be launched using Docker and Docker Compose, including all require
 From the project root, run:
 
 ```bash
-docker-compose up --build
+docker compose down -v
+docker system prune -af
+docker compose pull
+docker-compose up –build
+and do : run app/main.py
 
 
 
