@@ -246,8 +246,8 @@ class CassandraContentViewer(ctk.CTkFrame):
         if tables:
             self.table_dropdown.set(tables[0])
             self.on_table_change(tables[0])
-
-        self.update_dashboard()
+        else:
+            self.update_dashboard()
 
 
     def on_table_change(self, value):

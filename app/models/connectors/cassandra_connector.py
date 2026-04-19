@@ -1,10 +1,9 @@
-# app/models/connectors/cassandra_connector.py
-
-from cassandra.cluster import Cluster
-from cassandra.auth import PlainTextAuthProvider
-from cassandra.policies import RoundRobinPolicy
-from typing import Optional, List
+from typing import List, Optional
 import time
+
+from cassandra.auth import PlainTextAuthProvider
+from cassandra.cluster import Cluster
+from cassandra.policies import RoundRobinPolicy
 
 
 class CassandraConnector:
@@ -22,42 +21,57 @@ class CassandraConnector:
         self.cluster = None
         self.session = None
 
-    # ------------------------------------------------------------------
     def connect(self):
         auth_provider = None
         if self.user and self.password:
             auth_provider = PlainTextAuthProvider(
-                username=self.user, password=self.password
+                username=self.user,
+                password=self.password,
             )
 
+        last_error = None
         for _ in range(10):
             try:
                 self.cluster = Cluster(
                     [self.host],
                     port=self.port,
                     auth_provider=auth_provider,
-                    load_balancing_policy=RoundRobinPolicy()
+                    load_balancing_policy=RoundRobinPolicy(),
+                    connect_timeout=5,
+                    control_connection_timeout=5,
                 )
                 self.session = self.cluster.connect()
-                self.session.execute("SELECT now() FROM system.local")
+                self.session.execute("SELECT release_version FROM system.local")
                 return
-            except Exception:
-                time.sleep(5)
+            except Exception as exc:
+                last_error = exc
+                self.disconnect()
+                time.sleep(2)
 
-        raise Exception("Unable to connect to Cassandra")
+        raise Exception(f"Unable to connect to Cassandra: {last_error}")
 
-    # ------------------------------------------------------------------
     def disconnect(self):
         if self.session:
-            self.session.shutdown()
+            try:
+                self.session.shutdown()
+            except Exception:
+                pass
         if self.cluster:
-            self.cluster.shutdown()
+            try:
+                self.cluster.shutdown()
+            except Exception:
+                pass
+        self.session = None
+        self.cluster = None
 
-    # ------------------------------------------------------------------
     def list_keyspaces(self) -> List[str]:
+        if not self.cluster:
+            return []
         return list(self.cluster.metadata.keyspaces.keys())
 
     def list_tables(self, keyspace: str) -> List[str]:
+        if not self.cluster:
+            return []
         ks_meta = self.cluster.metadata.keyspaces.get(keyspace)
         if not ks_meta:
             return []
@@ -65,34 +79,23 @@ class CassandraConnector:
 
     def fetch_sample(self, keyspace, table, limit=1000):
         rows = self.session.execute(
-            f"SELECT * FROM {keyspace}.{table} LIMIT {limit}"
+            f"SELECT * FROM {keyspace}.{table} LIMIT {int(limit)}"
         )
-        return [dict(r._asdict()) for r in rows]
+        return [dict(row._asdict()) for row in rows]
 
     def fetch_all(self, keyspace, table):
-        rows = self.session.execute(
-            f"SELECT * FROM {keyspace}.{table}"
-        )
-        return [dict(r._asdict()) for r in rows]
+        rows = self.session.execute(f"SELECT * FROM {keyspace}.{table}")
+        return [dict(row._asdict()) for row in rows]
 
-    # ------------------------------------------------------------------
-    # ✅ NEW FILTER STRUCTURE — GUARANTEED WORKING
-    # ------------------------------------------------------------------
     def search_table(self, keyspace, table, column, operator, value):
-        rows = self.session.execute(
-            f"SELECT * FROM {keyspace}.{table}"
-        )
-
-        # Normalize input value once
+        rows = self.fetch_all(keyspace, table)
         raw_value = str(value).strip().lower()
 
         def normalize(v):
-            """Return (type, normalized_value)"""
             if v is None:
                 return ("none", None)
 
             s = str(v).strip().lower()
-
             try:
                 return ("number", float(s))
             except Exception:
@@ -102,11 +105,8 @@ class CassandraConnector:
 
         def compare(row_val):
             row_type, row_norm = normalize(row_val)
-
-            # Type mismatch → reject safely
             if row_type != input_type:
                 return False
-
             if operator == "=":
                 return row_norm == input_val
             if operator == "!=":
@@ -119,13 +119,10 @@ class CassandraConnector:
                 return row_norm >= input_val
             if operator == "<=":
                 return row_norm <= input_val
-
             return False
 
         results = []
-        for r in rows:
-            row_dict = r._asdict()
-            if column in row_dict and compare(row_dict[column]):
-                results.append(row_dict)
-
+        for row in rows:
+            if column in row and compare(row[column]):
+                results.append(row)
         return results
