@@ -4,11 +4,124 @@ Run from the repo root:  python seed.py
 Requirements: docker-compose must be running (docker-compose up -d)
 """
 
+import argparse
+import random
 import time
+import uuid
 import warnings
 import traceback
+from datetime import datetime, timedelta
 
 warnings.filterwarnings("ignore")
+
+# ==============================================================
+# SYNTHETIC DATA GENERATORS
+# ==============================================================
+FIRST_NAMES = [
+    "Alice", "Bob", "Carol", "David", "Eva", "Frank",
+    "Grace", "Henry", "Ivy", "Jack", "Kara", "Liam",
+    "Maya", "Noah", "Olivia", "Paul", "Quinn", "Ruby",
+    "Sam", "Tina", "Uma", "Victor", "Wendy", "Yara",
+]
+
+LAST_NAMES = [
+    "Martin", "Johnson", "White", "Brown", "Green",
+    "Walker", "Young", "Hall", "Allen", "King",
+    "Wright", "Scott", "Baker", "Carter", "Murphy",
+]
+
+COUNTRIES = [
+    "United States", "Canada", "Mexico", "Brazil", "Argentina",
+    "United Kingdom", "France", "Germany", "Spain", "Italy",
+    "Morocco", "Egypt", "South Africa", "Nigeria", "India",
+    "China", "Japan", "South Korea", "Australia", "New Zealand",
+]
+
+PRODUCT_CATEGORIES = [
+    "Electronics", "Books", "Home", "Sports", "Beauty",
+    "Fashion", "Toys", "Grocery", "Office", "Automotive",
+]
+
+PRODUCT_NAMES = {
+    "Electronics": ["Wireless Earbuds", "4K Monitor", "Smartwatch", "Bluetooth Speaker", "Portable SSD", "Gaming Mouse"],
+    "Books": ["Data Systems Guide", "Python Patterns", "Graph Thinking", "Cloud Basics", "AI Essentials", "Distributed Design"],
+    "Home": ["Ceramic Vase", "LED Desk Lamp", "Memory Foam Pillow", "Air Purifier", "Wall Clock", "Storage Basket"],
+    "Sports": ["Yoga Mat", "Running Belt", "Dumbbell Set", "Cycling Gloves", "Fitness Tracker", "Resistance Bands"],
+    "Beauty": ["Hydrating Serum", "Daily Cleanser", "SPF Moisturizer", "Lip Balm Set", "Hair Repair Mask", "Body Scrub"],
+    "Fashion": ["Classic Hoodie", "Denim Jacket", "Leather Wallet", "Canvas Sneakers", "Travel Backpack", "Wool Scarf"],
+    "Toys": ["Puzzle Cube", "STEM Robot Kit", "Wooden Train", "Building Blocks", "RC Car", "Plush Panda"],
+    "Grocery": ["Organic Coffee", "Sea Salt Crackers", "Dark Chocolate", "Olive Oil", "Herbal Tea", "Granola Mix"],
+    "Office": ["Mechanical Keyboard", "Notebook Set", "Ergonomic Chair", "Desk Organizer", "Laser Pointer", "Whiteboard Kit"],
+    "Automotive": ["Dash Camera", "Car Vacuum", "Phone Mount", "Seat Cushion", "Tire Inflator", "LED Headlight Kit"],
+}
+
+ACTION_TYPES = [
+    "view", "click", "search", "purchase",
+    "refund", "login", "logout", "share",
+]
+
+TAG_WORDS = [
+    "new", "sale", "premium", "eco",
+    "smart", "portable", "durable", "compact",
+    "wireless", "popular", "classic", "gift",
+]
+
+
+def _random_datetime_within(days_back):
+    now = datetime.utcnow()
+    delta = timedelta(
+        days=random.randint(0, days_back),
+        seconds=random.randint(0, 86399),
+    )
+    return (now - delta).replace(microsecond=0).isoformat()
+
+
+def make_user(i):
+    first_name = random.choice(FIRST_NAMES)
+    last_name = random.choice(LAST_NAMES)
+    full_name = "{} {}".format(first_name, last_name)
+    email_name = "{}.{}".format(first_name.lower(), last_name.lower())
+    return {
+        "user_id": "U{:06d}".format(i),
+        "name": full_name,
+        "email": "{}{}@example.com".format(email_name, i),
+        "country": random.choice(COUNTRIES),
+        "score": random.randint(0, 1000),
+        "last_login": _random_datetime_within(730),
+    }
+
+
+def make_product(i):
+    category = random.choice(PRODUCT_CATEGORIES)
+    return {
+        "product_id": "P{:06d}".format(i),
+        "name": random.choice(PRODUCT_NAMES[category]),
+        "category": category,
+        "price": round(random.uniform(1.99, 999.99), 2),
+        "stock": random.randint(0, 500),
+        "tags": random.sample(TAG_WORDS, random.randint(2, 4)),
+        "rating": round(random.uniform(1.0, 5.0), 1),
+    }
+
+
+def make_event(i):
+    upper_bound = max(i, 1)
+    return {
+        "event_id": str(uuid.uuid4()),
+        "user_id": "U{:06d}".format(random.randint(0, upper_bound)),
+        "action": random.choice(ACTION_TYPES),
+        "timestamp": _random_datetime_within(365),
+        "value": round(random.uniform(0, 500), 2),
+    }
+
+
+def _format_progress(current, total):
+    return "   ↳ {:,} / {:,} inserted...".format(current, total)
+
+
+def _run_neo4j_batch(session, query, rows):
+    result = session.run(query, rows=rows)
+    result.consume()
 
 # ─────────────────────────────────────────────
 # SAMPLE DATA
@@ -295,9 +408,382 @@ def seed_neo4j():
 
 
 # ==============================================================
+# LARGE BENCHMARK SEEDERS
+# ==============================================================
+def seed_mongodb_large(size):
+    print("\n📦 [MongoDB] Large benchmark seeding...")
+    from pymongo import MongoClient
+
+    client = MongoClient("mongodb://localhost:27017")
+    db = client["benchmark"]
+
+    db.users.drop()
+    db.products.drop()
+
+    batch_size = 1000
+    users_inserted = 0
+    products_inserted = 0
+
+    for start in range(0, size, batch_size):
+        end = min(start + batch_size, size)
+        db.users.insert_many([make_user(i) for i in range(start, end)])
+        users_inserted += end - start
+        if users_inserted % 10000 == 0 or users_inserted == size:
+            print(_format_progress(users_inserted, size))
+
+    for start in range(0, size, batch_size):
+        end = min(start + batch_size, size)
+        db.products.insert_many([make_product(i) for i in range(start, end)])
+        products_inserted += end - start
+        if products_inserted % 10000 == 0 or products_inserted == size:
+            print(_format_progress(products_inserted, size))
+
+    user_count = db.users.count_documents({})
+    product_count = db.products.count_documents({})
+    print("   OK benchmark.users    : {:,} documents".format(user_count))
+    print("   OK benchmark.products : {:,} documents".format(product_count))
+    client.close()
+
+    return {
+        "database": "benchmark",
+        "users": user_count,
+        "products": product_count,
+    }
+
+
+def seed_redis_large(size):
+    print("\n🔴 [Redis] Large benchmark seeding...")
+    import redis
+
+    r = redis.Redis(host="localhost", port=6379, db=1, decode_responses=True)
+    r.flushdb()
+
+    pipeline = r.pipeline()
+    inserted = 0
+
+    for i in range(size):
+        user = make_user(i)
+        pipeline.hset("user:{}".format(user["user_id"]), mapping={
+            "user_id": user["user_id"],
+            "name": user["name"],
+            "email": user["email"],
+            "country": user["country"],
+            "score": str(user["score"]),
+            "last_login": user["last_login"],
+        })
+        inserted += 1
+
+        if inserted % 500 == 0:
+            pipeline.execute()
+        if inserted % 10000 == 0 or inserted == size:
+            print(_format_progress(inserted, size))
+
+    if inserted % 500 != 0:
+        pipeline.execute()
+
+    key_count = r.dbsize()
+    print("   OK Redis DB 1 user:* hashes : {:,} keys".format(key_count))
+
+    return {
+        "db_index": 1,
+        "user_hashes": key_count,
+    }
+
+
+def seed_cassandra_large(size):
+    print("\n🟡 [Cassandra] Large benchmark seeding...")
+    from cassandra.cluster import Cluster
+    from cassandra.query import BatchStatement
+
+    cluster = None
+    session = None
+
+    print("   Waiting for Cassandra to be ready...")
+    for attempt in range(12):
+        try:
+            cluster = Cluster(["localhost"], port=9042)
+            session = cluster.connect()
+            session.execute("SELECT release_version FROM system.local")
+            print("   Cassandra ready on attempt {}".format(attempt + 1))
+            break
+        except Exception as e:
+            print("   Waiting for Cassandra... ({}/12) - {}".format(attempt + 1, e))
+            if session:
+                try:
+                    session.shutdown()
+                except Exception:
+                    pass
+                session = None
+            if cluster:
+                try:
+                    cluster.shutdown()
+                except Exception:
+                    pass
+                cluster = None
+            time.sleep(5)
+    else:
+        raise RuntimeError("Cassandra not ready after 60s.")
+
+    session.execute("""
+CREATE KEYSPACE IF NOT EXISTS benchmark
+WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}
+""")
+    session.set_keyspace("benchmark")
+
+    session.execute("DROP TABLE IF EXISTS events")
+    session.execute("DROP TABLE IF EXISTS users")
+
+    session.execute("""
+CREATE TABLE events (
+    event_id TEXT PRIMARY KEY,
+    user_id TEXT,
+    action TEXT,
+    timestamp TEXT,
+    value FLOAT
+)
+""")
+    session.execute("""
+CREATE TABLE users (
+    user_id TEXT PRIMARY KEY,
+    name TEXT,
+    email TEXT,
+    country TEXT,
+    score INT,
+    last_login TEXT
+)
+""")
+
+    users_stmt = session.prepare(
+        "INSERT INTO users (user_id, name, email, country, score, last_login) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    events_stmt = session.prepare(
+        "INSERT INTO events (event_id, user_id, action, timestamp, value) VALUES (?, ?, ?, ?, ?)"
+    )
+
+    batch_size = 100
+    users_inserted = 0
+    events_inserted = 0
+
+    for start in range(0, size, batch_size):
+        end = min(start + batch_size, size)
+        batch = BatchStatement()
+        for i in range(start, end):
+            user = make_user(i)
+            batch.add(users_stmt, (
+                user["user_id"], user["name"], user["email"], user["country"],
+                user["score"], user["last_login"]
+            ))
+        session.execute(batch)
+        users_inserted += end - start
+        if users_inserted % 5000 == 0 or users_inserted == size:
+            print(_format_progress(users_inserted, size))
+
+    for start in range(0, size, batch_size):
+        end = min(start + batch_size, size)
+        batch = BatchStatement()
+        for i in range(start, end):
+            event = make_event(i)
+            batch.add(events_stmt, (
+                event["event_id"], event["user_id"], event["action"],
+                event["timestamp"], event["value"]
+            ))
+        session.execute(batch)
+        events_inserted += end - start
+        if events_inserted % 5000 == 0 or events_inserted == size:
+            print(_format_progress(events_inserted, size))
+
+    session.shutdown()
+    cluster.shutdown()
+
+    print("   OK benchmark.events : {:,} rows".format(events_inserted))
+    print("   OK benchmark.users  : {:,} rows".format(users_inserted))
+
+    return {
+        "keyspace": "benchmark",
+        "users": users_inserted,
+        "events": events_inserted,
+    }
+
+
+def seed_neo4j_large(size):
+    print("\n🟢 [Neo4j] Large benchmark seeding...")
+    from neo4j import GraphDatabase
+
+    driver = None
+    for attempt in range(12):
+        try:
+            driver = GraphDatabase.driver(
+                "bolt://localhost:7687",
+                auth=("neo4j", "password")
+            )
+            with driver.session() as s:
+                s.run("RETURN 1")
+            print("   Connected on attempt {}".format(attempt + 1))
+            break
+        except Exception as e:
+            print("   Waiting for Neo4j... ({}/12) - {}".format(attempt + 1, e))
+            if driver:
+                try:
+                    driver.close()
+                except Exception:
+                    pass
+            driver = None
+            time.sleep(5)
+    else:
+        raise RuntimeError("Could not connect to Neo4j after 60s.")
+
+    batch_size = 500
+    users_inserted = 0
+    products_inserted = 0
+
+    with driver.session() as s:
+        s.run(
+            "CREATE CONSTRAINT benchmark_user_id IF NOT EXISTS "
+            "FOR (u:User) REQUIRE u.user_id IS UNIQUE"
+        ).consume()
+        s.run(
+            "CREATE CONSTRAINT benchmark_product_id IF NOT EXISTS "
+            "FOR (p:Product) REQUIRE p.product_id IS UNIQUE"
+        ).consume()
+
+        for start in range(0, size, batch_size):
+            end = min(start + batch_size, size)
+            rows = [make_user(i) for i in range(start, end)]
+            _run_neo4j_batch(s, """
+UNWIND $rows AS row
+MERGE (u:User {user_id: row.user_id})
+SET u.name = row.name,
+    u.email = row.email,
+    u.country = row.country,
+    u.score = row.score,
+    u.last_login = row.last_login
+""", rows=rows)
+            users_inserted += end - start
+            if users_inserted % 2000 == 0 or users_inserted == size:
+                print(_format_progress(users_inserted, size))
+
+        for start in range(0, size, batch_size):
+            end = min(start + batch_size, size)
+            rows = [make_product(i) for i in range(start, end)]
+            _run_neo4j_batch(s, """
+UNWIND $rows AS row
+MERGE (p:Product {product_id: row.product_id})
+SET p.name = row.name,
+    p.category = row.category,
+    p.price = row.price,
+    p.stock = row.stock,
+    p.tags = row.tags,
+    p.rating = row.rating
+""", rows=rows)
+            products_inserted += end - start
+            if products_inserted % 2000 == 0 or products_inserted == size:
+                print(_format_progress(products_inserted, size))
+
+        follows_total = 0
+        likes_total = 0
+        follows_rows = []
+        likes_rows = []
+
+        for i in range(size):
+            user_id = "U{:06d}".format(i)
+            if size > 1:
+                target_count = min(random.randint(2, 5), size - 1)
+                follow_targets = set()
+                while len(follow_targets) < target_count:
+                    target = random.randrange(size)
+                    if target != i:
+                        follow_targets.add(target)
+                for target in follow_targets:
+                    follows_rows.append({
+                        "user_id": user_id,
+                        "target_user_id": "U{:06d}".format(target),
+                    })
+            for target in random.sample(range(size), min(random.randint(3, 8), size)):
+                likes_rows.append({
+                    "user_id": user_id,
+                    "product_id": "P{:06d}".format(target),
+                })
+
+            if len(follows_rows) >= batch_size:
+                _run_neo4j_batch(s, """
+UNWIND $rows AS row
+MATCH (u:User {user_id: row.user_id})
+MATCH (v:User {user_id: row.target_user_id})
+MERGE (u)-[:FOLLOWS]->(v)
+""", rows=follows_rows)
+                follows_total += len(follows_rows)
+                follows_rows = []
+
+            if len(likes_rows) >= batch_size:
+                _run_neo4j_batch(s, """
+UNWIND $rows AS row
+MATCH (u:User {user_id: row.user_id})
+MATCH (p:Product {product_id: row.product_id})
+MERGE (u)-[:LIKES]->(p)
+""", rows=likes_rows)
+                likes_total += len(likes_rows)
+                likes_rows = []
+
+            if (i + 1) % 2000 == 0 or i + 1 == size:
+                print(_format_progress(i + 1, size))
+
+        if follows_rows:
+            _run_neo4j_batch(s, """
+UNWIND $rows AS row
+MATCH (u:User {user_id: row.user_id})
+MATCH (v:User {user_id: row.target_user_id})
+MERGE (u)-[:FOLLOWS]->(v)
+""", rows=follows_rows)
+            follows_total += len(follows_rows)
+
+        if likes_rows:
+            _run_neo4j_batch(s, """
+UNWIND $rows AS row
+MATCH (u:User {user_id: row.user_id})
+MATCH (p:Product {product_id: row.product_id})
+MERGE (u)-[:LIKES]->(p)
+""", rows=likes_rows)
+            likes_total += len(likes_rows)
+
+        user_count = s.run("MATCH (u:User) RETURN count(u) AS c").single()["c"]
+        product_count = s.run("MATCH (p:Product) RETURN count(p) AS c").single()["c"]
+        follows_count = s.run("MATCH ()-[r:FOLLOWS]->() RETURN count(r) AS c").single()["c"]
+        likes_count = s.run("MATCH ()-[r:LIKES]->() RETURN count(r) AS c").single()["c"]
+
+    print("   OK User nodes    : {:,}".format(user_count))
+    print("   OK Product nodes : {:,}".format(product_count))
+    print("   OK FOLLOWS rels  : {:,}".format(follows_count))
+    print("   OK LIKES rels    : {:,}".format(likes_count))
+    driver.close()
+
+    return {
+        "users": user_count,
+        "products": product_count,
+        "follows": follows_count,
+        "likes": likes_count,
+    }
+
+
+# ==============================================================
 # MAIN
 # ==============================================================
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Seed NoSQL Vis demo and benchmark datasets.")
+    parser.add_argument(
+        "--large",
+        action="store_true",
+        help="Seed additional large benchmark datasets after the basic demo seed.",
+    )
+    parser.add_argument(
+        "--size",
+        type=int,
+        default=10000,
+        help="Number of records to insert per database for the benchmark seed (default: 10000).",
+    )
+    args = parser.parse_args()
+    if args.size <= 0:
+        parser.error("--size must be a positive integer")
+
     print("=" * 50)
     print("  NoSQL Vis -- Database Seeder")
     print("=" * 50)
@@ -325,4 +811,54 @@ if __name__ == "__main__":
     else:
         print("  All 4 databases seeded successfully!")
         print("  You can now launch: python app/main.py")
+
+    if args.large:
+        print("\n" + "=" * 50)
+        print("  Large Benchmark Seed")
+        print("  Target size per database: {:,}".format(args.size))
+        print("=" * 50)
+
+        large_results = {}
+        large_errors = []
+
+        for name, fn in [
+            ("MongoDB", lambda: seed_mongodb_large(args.size)),
+            ("Redis", lambda: seed_redis_large(args.size)),
+            ("Cassandra", lambda: seed_cassandra_large(args.size)),
+            ("Neo4j", lambda: seed_neo4j_large(args.size)),
+        ]:
+            try:
+                large_results[name] = fn()
+            except Exception:
+                print("\n   ERROR in {} large seeder:".format(name))
+                traceback.print_exc()
+                large_errors.append(name)
+
+        print("\n" + "=" * 50)
+        print("  Large Seed Summary")
+        print("=" * 50)
+        if "MongoDB" in large_results:
+            result = large_results["MongoDB"]
+            print("  MongoDB   -> benchmark.users: {:,}, benchmark.products: {:,}".format(
+                result["users"], result["products"]
+            ))
+        if "Redis" in large_results:
+            result = large_results["Redis"]
+            print("  Redis     -> DB {} user:* hashes: {:,}".format(
+                result["db_index"], result["user_hashes"]
+            ))
+        if "Cassandra" in large_results:
+            result = large_results["Cassandra"]
+            print("  Cassandra -> benchmark.users: {:,}, benchmark.events: {:,}".format(
+                result["users"], result["events"]
+            ))
+        if "Neo4j" in large_results:
+            result = large_results["Neo4j"]
+            print("  Neo4j     -> User nodes: {:,}, Product nodes: {:,}, FOLLOWS: {:,}, LIKES: {:,}".format(
+                result["users"], result["products"], result["follows"], result["likes"]
+            ))
+        if large_errors:
+            print("  WARNING: Large seed errors in: {}".format(", ".join(large_errors)))
+        else:
+            print("  Large benchmark datasets seeded successfully.")
     print("=" * 50)
