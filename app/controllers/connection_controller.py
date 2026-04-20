@@ -15,6 +15,7 @@ class ConnectionController:
         self.vis_tab = vis_tab
         self.tab_control = tab_control
         self.logout_tab = logout_tab
+        self.root = self.tab_control.winfo_toplevel()
 
         self.backend = None
         self.viewer = None
@@ -28,6 +29,48 @@ class ConnectionController:
 
 
         self.build_ui()
+        self.build_loading_indicator()
+
+    def build_loading_indicator(self):
+        self.loading_frame = ctk.CTkFrame(self.root, fg_color="#FFF4CC", corner_radius=12)
+        self.loading_label = ctk.CTkLabel(
+            self.loading_frame,
+            text="Loading...",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#333333"
+        )
+        self.loading_label.pack(side="left", padx=(12, 8), pady=8)
+
+        self.loading_bar = ctk.CTkProgressBar(self.loading_frame, mode="indeterminate", width=120)
+        self.loading_bar.pack(side="left", padx=(0, 12), pady=8)
+        self.loading_frame.place_forget()
+
+        self.root.set_loading = self.set_loading
+        self.root.clear_loading = self.clear_loading
+
+    def set_loading(self, message="Loading..."):
+        def _show():
+            self.loading_label.configure(text=message)
+            self.loading_frame.place(relx=1.0, x=-20, y=10, anchor="ne")
+            self.loading_frame.lift()
+            self.loading_bar.start()
+            self.root.update()
+
+        if threading.current_thread() is threading.main_thread():
+            _show()
+        else:
+            self.root.after(0, _show)
+
+    def clear_loading(self):
+        def _hide():
+            self.loading_bar.stop()
+            self.loading_frame.place_forget()
+            self.root.update()
+
+        if threading.current_thread() is threading.main_thread():
+            _hide()
+        else:
+            self.root.after(0, _hide)
 
     def build_ui(self):
         title = ctk.CTkLabel(self.conn_tab, text="NoSQL Database Connection",
@@ -141,14 +184,18 @@ class ConnectionController:
             w.destroy()
 
         # Load the viewer (GUI, must be on main thread!)
-        if db_type == "MongoDB":
-            self.viewer = MongoContentViewer(self.vis_tab, self.backend)
-        elif db_type == "Redis":
-            self.viewer = RedisContentViewer(self.vis_tab, self.backend)
-        elif db_type == "Neo4j":
-            self.viewer = Neo4jContentViewer(self.vis_tab, self.backend)
-        elif db_type == "Cassandra":
-            self.viewer = CassandraContentViewer(self.vis_tab, self.backend)
+        self.set_loading(f"Loading {db_type} viewer...")
+        try:
+            if db_type == "MongoDB":
+                self.viewer = MongoContentViewer(self.vis_tab, self.backend)
+            elif db_type == "Redis":
+                self.viewer = RedisContentViewer(self.vis_tab, self.backend)
+            elif db_type == "Neo4j":
+                self.viewer = Neo4jContentViewer(self.vis_tab, self.backend)
+            elif db_type == "Cassandra":
+                self.viewer = CassandraContentViewer(self.vis_tab, self.backend)
+        finally:
+            self.clear_loading()
 
         # Load Logout viewer
         self.logout_viewer = LogoutContentViewer(self.logout_tab,  controller=self, user=user, db_type=db_type, host=host, port=port)

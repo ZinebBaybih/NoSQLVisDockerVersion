@@ -21,6 +21,7 @@ class MongoContentViewer:
         self.total_records = 0
         self.current_db_name = None
         self.current_collection_name = None
+        self.current_db_collections = []
 
         # Nettoyage du parent
         for widget in parent.winfo_children():
@@ -36,6 +37,23 @@ class MongoContentViewer:
         )
         self.filter_entry.pack(fill="x", padx=20, pady=(15, 10))
         self.filter_var.trace("w", lambda *args: self.update_filter())
+
+        self.summary_frame = ctk.CTkFrame(parent, fg_color="#FFFFFF")
+        self.summary_frame.pack(fill="x", padx=20, pady=(0, 8))
+        self.summary_cards = {}
+        for title, color in [
+            ("Database", "#2C2C2C"),
+            ("Collections", "#18357E"),
+            ("Total Documents", "#4EAFFA"),
+            ("Selected Collection", "#058484"),
+        ]:
+            card = ctk.CTkFrame(self.summary_frame, fg_color=color, corner_radius=10)
+            card.pack(side="left", expand=True, fill="both", padx=6)
+            ctk.CTkLabel(card, text=title, font=("Arial", 12), text_color="white").pack(pady=(6, 0))
+            value = ctk.CTkLabel(card, text="--", font=("Arial", 16, "bold"), text_color="white")
+            value.pack(pady=(0, 10))
+            self.summary_cards[title] = value
+        self.summary_frame.pack_forget()
 
         self.page_size_frame = ctk.CTkFrame(parent, fg_color="transparent")
         self.page_size_frame.pack(fill="x", padx=20, pady=(0, 8))
@@ -84,6 +102,16 @@ class MongoContentViewer:
     def clear_elements(self):
         for widget in self.elements_frame.winfo_children():
             widget.destroy()
+
+    def set_loading(self, message="Loading..."):
+        callback = getattr(self.parent.winfo_toplevel(), "set_loading", None)
+        if callback:
+            callback(message)
+
+    def clear_loading(self):
+        callback = getattr(self.parent.winfo_toplevel(), "clear_loading", None)
+        if callback:
+            callback()
 
     def reset_pagination(self, total_records):
         self.current_page = 1
@@ -144,23 +172,38 @@ class MongoContentViewer:
 
     # ---------------------- DATABASES ----------------------
     def show_dbs(self):
-        self.clear_elements()
-        self.preview_label.pack_forget()
-        self.page_size_frame.pack_forget()
-        self.pagination_frame.pack_forget()
-        self.back_btn.pack_forget()
-        self.history.clear()
-        self.current_level = "dbs"
-        self.opened_db_btn_frame = None
-
+        self.set_loading("Loading MongoDB databases...")
         try:
-            dbs = self.backend.list_databases()
-        except Exception as e:
-            print("Erreur list_databases:", e)
-            dbs = []
+            self.clear_elements()
+            self.summary_frame.pack_forget()
+            self.preview_label.pack_forget()
+            self.page_size_frame.pack_forget()
+            self.pagination_frame.pack_forget()
+            self.back_btn.pack_forget()
+            self.history.clear()
+            self.current_level = "dbs"
+            self.opened_db_btn_frame = None
 
-        for db in dbs:
-            self.create_db_row(db)
+            try:
+                dbs = self.backend.list_databases()
+            except Exception as e:
+                print("Erreur list_databases:", e)
+                dbs = []
+
+            for db in dbs:
+                self.create_db_row(db)
+        finally:
+            self.clear_loading()
+
+    def update_summary(self, db_name=None, collections_count=0, total_docs=0, selected_collection=None):
+        self.summary_cards["Database"].configure(text=db_name or "--")
+        self.summary_cards["Collections"].configure(text=str(collections_count) if db_name else "--")
+        self.summary_cards["Total Documents"].configure(text=str(total_docs) if db_name else "--")
+        self.summary_cards["Selected Collection"].configure(text=selected_collection or "--")
+        if db_name:
+            self.summary_frame.pack(fill="x", padx=20, pady=(0, 8), before=self.filter_entry)
+        else:
+            self.summary_frame.pack_forget()
 
     def create_db_row(self, db):
         frame = ctk.CTkFrame(self.elements_frame, fg_color="#e3e3e3", corner_radius=10)
@@ -214,23 +257,36 @@ class MongoContentViewer:
 
     # ---------------------- COLLECTIONS ----------------------
     def show_collections(self, db_name):
-        self.clear_elements()
-        self.preview_label.pack_forget()
-        self.page_size_frame.pack_forget()
-        self.pagination_frame.pack_forget()
-        self.current_level = "collections"
-        self.history.append(("dbs", None))
-        self.back_btn.pack(pady=5, anchor="w")
-        self.opened_col_btn_frame = None
-
+        self.set_loading("Loading MongoDB collections...")
         try:
-            cols = self.backend.list_collections(db_name)
-        except Exception as e:
-            print("Erreur list_collections:", e)
-            cols = []
+            self.clear_elements()
+            self.current_db_name = db_name
+            self.preview_label.pack_forget()
+            self.page_size_frame.pack_forget()
+            self.pagination_frame.pack_forget()
+            self.current_level = "collections"
+            self.history.append(("dbs", None))
+            self.back_btn.pack(pady=5, anchor="w")
+            self.opened_col_btn_frame = None
 
-        for col in cols:
-            self.create_collection_row(db_name, col)
+            try:
+                cols = self.backend.list_collections(db_name)
+            except Exception as e:
+                print("Erreur list_collections:", e)
+                cols = []
+
+            self.current_db_collections = cols
+            total_docs = sum(col.get("count", 0) for col in cols)
+            self.update_summary(
+                db_name=db_name,
+                collections_count=len(cols),
+                total_docs=total_docs,
+            )
+
+            for col in cols:
+                self.create_collection_row(db_name, col)
+        finally:
+            self.clear_loading()
 
     def create_collection_row(self, db_name, col):
         frame = ctk.CTkFrame(self.elements_frame, fg_color="#e3e3e3", corner_radius=10)
@@ -289,46 +345,57 @@ class MongoContentViewer:
         self.back_btn.pack(pady=5, anchor="w")
         self.current_db_name = db_name
         self.current_collection_name = col_name
+        total_docs = sum(col.get("count", 0) for col in self.current_db_collections)
+        self.update_summary(
+            db_name=db_name,
+            collections_count=len(self.current_db_collections),
+            total_docs=total_docs,
+            selected_collection=col_name,
+        )
         self.reset_pagination(total_count)
         self.page_size_frame.pack(fill="x", padx=20, pady=(0, 8))
         self.preview_label.pack(fill="x", padx=20, pady=(0, 8))
         self.render_documents_page()
 
     def render_documents_page(self):
-        self.clear_elements()
-        offset = (self.current_page - 1) * self.current_page_size
+        self.set_loading("Loading MongoDB documents...")
         try:
-            docs = self.backend.list_documents(
-                self.current_db_name,
-                self.current_collection_name,
-                offset=offset,
-                limit=self.current_page_size,
+            self.clear_elements()
+            offset = (self.current_page - 1) * self.current_page_size
+            try:
+                docs = self.backend.list_documents(
+                    self.current_db_name,
+                    self.current_collection_name,
+                    offset=offset,
+                    limit=self.current_page_size,
+                )
+            except Exception as e:
+                print("Erreur list_documents:", e)
+                docs = []
+
+            start = offset + 1 if self.total_records else 0
+            end = min(offset + len(docs), self.total_records)
+            self.preview_label.configure(
+                text="Showing {}-{} of {} documents".format(start, end, self.total_records)
             )
-        except Exception as e:
-            print("Erreur list_documents:", e)
-            docs = []
 
-        start = offset + 1 if self.total_records else 0
-        end = min(offset + len(docs), self.total_records)
-        self.preview_label.configure(
-            text="Showing {}-{} of {} documents".format(start, end, self.total_records)
-        )
+            for doc in docs:
+                frame = ctk.CTkFrame(self.elements_frame, fg_color="#e3e3e3", corner_radius=10)
+                frame.pack(fill="x", pady=4, padx=6)
+                label = ctk.CTkLabel(
+                    frame,
+                    text=str(doc),
+                    justify="left",
+                    anchor="w",
+                    wraplength=700,
+                    font=ctk.CTkFont(size=11)
+                )
+                label.pack(side="left", padx=10, pady=6)
+                frame.doc_name = str(doc)
 
-        for doc in docs:
-            frame = ctk.CTkFrame(self.elements_frame, fg_color="#e3e3e3", corner_radius=10)
-            frame.pack(fill="x", pady=4, padx=6)
-            label = ctk.CTkLabel(
-                frame,
-                text=str(doc),
-                justify="left",
-                anchor="w",
-                wraplength=700,
-                font=ctk.CTkFont(size=11)
-            )
-            label.pack(side="left", padx=10, pady=6)
-            frame.doc_name = str(doc)
-
-        self.update_pagination_controls()
+            self.update_pagination_controls()
+        finally:
+            self.clear_loading()
 
     # ---------------------- GRAPHIQUES ----------------------
     def show_db_graph(self, db_name):

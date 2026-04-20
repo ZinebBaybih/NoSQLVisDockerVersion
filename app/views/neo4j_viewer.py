@@ -110,35 +110,48 @@ class Neo4jContentViewer(ctk.CTkFrame):
 
         self.show_labels()
 
+    def set_loading(self, message="Loading..."):
+        callback = getattr(self.winfo_toplevel(), "set_loading", None)
+        if callback:
+            callback(message)
+
+    def clear_loading(self):
+        callback = getattr(self.winfo_toplevel(), "clear_loading", None)
+        if callback:
+            callback()
 
     def show_labels(self):
         """Fetch and display label statistics (nodes + relations)."""
-        for i in self.labels_tree.get_children():
-            self.labels_tree.delete(i)
-        self.label_counts = {}
-
+        self.set_loading("Loading Neo4j labels...")
         try:
-            labels = self.backend.client.list_databases()
+            for i in self.labels_tree.get_children():
+                self.labels_tree.delete(i)
+            self.label_counts = {}
 
-            for lbl in labels:
-                label_name = lbl["name"]
-                node_count = lbl["count"]
+            try:
+                labels = self.backend.client.list_databases()
 
-                try:
-                    rels = self.backend.client.list_relationships(label_name)
-                    rel_count = len(rels)
-                except Exception:
-                    rel_count = 0
+                for lbl in labels:
+                    label_name = lbl["name"]
+                    node_count = lbl["count"]
 
-                self.label_counts[label_name] = node_count
+                    try:
+                        rels = self.backend.client.list_relationships(label_name)
+                        rel_count = len(rels)
+                    except Exception:
+                        rel_count = 0
 
-                self.labels_tree.insert(
-                    "", "end",
-                    values=(label_name, node_count, rel_count)
-                )
+                    self.label_counts[label_name] = node_count
 
-        except Exception as e:
-            messagebox.showerror("Erreur", f"Impossible de charger les labels:\n{e}")
+                    self.labels_tree.insert(
+                        "", "end",
+                        values=(label_name, node_count, rel_count)
+                    )
+
+            except Exception as e:
+                messagebox.showerror("Erreur", f"Impossible de charger les labels:\n{e}")
+        finally:
+            self.clear_loading()
 
 
     def on_label_double_click(self, event):
@@ -191,16 +204,20 @@ class Neo4jContentViewer(ctk.CTkFrame):
         self.update_pagination_controls()
 
     def render_nodes_page(self):
+        self.set_loading("Loading Neo4j nodes...")
         try:
-            nodes = self.backend.client.list_documents(
-                None,
-                self.selected_label,
-                offset=(self.current_page - 1) * self.current_page_size,
-                limit=self.current_page_size,
-            )
-            self.display_nodes(nodes)
-        except Exception as e:
-            messagebox.showerror("Erreur", f"Erreur list_documents: {e}")
+            try:
+                nodes = self.backend.client.list_documents(
+                    None,
+                    self.selected_label,
+                    offset=(self.current_page - 1) * self.current_page_size,
+                    limit=self.current_page_size,
+                )
+                self.display_nodes(nodes)
+            except Exception as e:
+                messagebox.showerror("Erreur", f"Erreur list_documents: {e}")
+        finally:
+            self.clear_loading()
 
     def update_pagination_controls(self):
         if not self.selected_label or self.total_records <= 0:

@@ -14,8 +14,6 @@ class RedisContentViewer(ctk.CTkFrame):
     def __init__(self, master, backend, **kwargs):
         super().__init__(master, **kwargs)
         self.backend = backend
-        self.chart_canvas = None
-        self.graph2_canvas = None
         self.current_meta = {}
         self.selected_db_index = None
         self.current_page = 1
@@ -44,98 +42,97 @@ class RedisContentViewer(ctk.CTkFrame):
         for widget in self.winfo_children():
             widget.destroy()
 
+    def set_loading(self, message="Loading..."):
+        callback = getattr(self.winfo_toplevel(), "set_loading", None)
+        if callback:
+            callback(message)
+
+    def clear_loading(self):
+        callback = getattr(self.winfo_toplevel(), "clear_loading", None)
+        if callback:
+            callback()
+
     def show_database_selector(self):
-        self.clear_view()
-
-        ctk.CTkLabel(
-            self,
-            text="Select Redis Database",
-            font=("Arial", 20, "bold")
-        ).pack(pady=(20, 10))
-
-        ctk.CTkLabel(
-            self,
-            text="Choose a Redis logical database to explore.",
-            font=("Arial", 12)
-        ).pack(pady=(0, 15))
-
-        selector_frame = ctk.CTkScrollableFrame(self, fg_color="#F8F8F8")
-        selector_frame.pack(fill="both", expand=True, padx=20, pady=10)
-
+        self.set_loading("Loading Redis databases...")
         try:
-            databases = [
-                db for db in self.backend.list_databases()
-                if db.get("count") and db.get("count") > 0
-            ]
-        except Exception as e:
-            messagebox.showerror("Error", f"Cannot load Redis databases: {e}")
-            databases = []
+            self.clear_view()
 
-        if not databases:
             ctk.CTkLabel(
-                selector_frame,
-                text="No non-empty Redis databases found.",
-                font=("Arial", 13)
-            ).pack(pady=20)
-            return
+                self,
+                text="Select Redis Database",
+                font=("Arial", 20, "bold")
+            ).pack(pady=(20, 10))
 
-        for db in databases:
-            ctk.CTkButton(
-                selector_frame,
-                text="{} - {} keys".format(db["name"], db["count"]),
-                command=lambda index=db["index"]: self.select_database(index),
-                height=40
-            ).pack(fill="x", padx=10, pady=8)
+            ctk.CTkLabel(
+                self,
+                text="Choose a Redis logical database to explore.",
+                font=("Arial", 12)
+            ).pack(pady=(0, 15))
+
+            selector_frame = ctk.CTkScrollableFrame(self, fg_color="#F8F8F8")
+            selector_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+            try:
+                databases = [
+                    db for db in self.backend.list_databases()
+                    if db.get("count") and db.get("count") > 0
+                ]
+            except Exception as e:
+                messagebox.showerror("Error", f"Cannot load Redis databases: {e}")
+                databases = []
+
+            if not databases:
+                ctk.CTkLabel(
+                    selector_frame,
+                    text="No non-empty Redis databases found.",
+                    font=("Arial", 13)
+                ).pack(pady=20)
+                return
+
+            for db in databases:
+                ctk.CTkButton(
+                    selector_frame,
+                    text="{} - {} keys".format(db["name"], db["count"]),
+                    command=lambda index=db["index"]: self.select_database(index),
+                    height=40
+                ).pack(fill="x", padx=10, pady=8)
+        finally:
+            self.clear_loading()
 
     def select_database(self, db_index):
+        self.set_loading("Switching Redis database...")
         try:
             self.backend.switch_db(db_index)
             self.selected_db_index = db_index
             self.show_dashboard()
         except Exception as e:
             messagebox.showerror("Error", f"Cannot switch Redis database: {e}")
+        finally:
+            self.clear_loading()
 
     def show_dashboard(self):
         self.clear_view()
 
-        self.dashboard_frame = ctk.CTkFrame(self, fg_color="#F0F0F0")
-        self.dashboard_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self.summary_frame = ctk.CTkFrame(self, fg_color="#FFFFFF")
+        self.summary_frame.pack(fill="x", padx=10, pady=(10, 6))
 
-        self.dashboard_inner_frame = ctk.CTkFrame(self.dashboard_frame, fg_color="#F8F8F8")
-        self.dashboard_inner_frame.pack(fill="both", expand=True)
-
-        self.chart_frame = ctk.CTkFrame(self.dashboard_inner_frame, fg_color="#FFFFFF")
-        self.chart_frame.pack(side="left", fill="both", expand=True, padx=8, pady=8)
-        self.chart_note_label = ctk.CTkLabel(self.chart_frame, text="Sampled", font=("Arial", 11))
-
-        self.stats_frame = ctk.CTkFrame(self.dashboard_inner_frame, fg_color="#EFEFEF")
-        self.stats_frame.pack(side="left", fill="both", expand=True, padx=8, pady=8)
-
-        self.graph2_frame = ctk.CTkFrame(self.dashboard_inner_frame, fg_color="#FFFFFF")
-        self.graph2_frame.pack(side="left", fill="both", expand=True, padx=8, pady=8)
-        self.graph2_note_label = ctk.CTkLabel(self.graph2_frame, text="Sampled", font=("Arial", 11))
-
-        ctk.CTkLabel(self.stats_frame, text="METADATA", font=("Arial", 14, "bold")).pack(pady=(20, 10))
-
-        self.db_total_keys_label = ctk.CTkLabel(self.stats_frame, text="Total keys: --", anchor="w")
-        self.db_expiring_keys_label = ctk.CTkLabel(self.stats_frame, text="Expiring keys: --", anchor="w")
-        self.db_persistent_keys_label = ctk.CTkLabel(self.stats_frame, text="Persistent keys: --", anchor="w")
-        self.db_memory_used_label = ctk.CTkLabel(self.stats_frame, text="Memory used: --", anchor="w")
-        self.db_uptime_label = ctk.CTkLabel(self.stats_frame, text="Server uptime: --", anchor="w")
-        self.db_other_stat_label = ctk.CTkLabel(self.stats_frame, text="Total key types: --", anchor="w")
-
-        for lbl in (
-            self.db_total_keys_label,
-            self.db_expiring_keys_label,
-            self.db_persistent_keys_label,
-            self.db_memory_used_label,
-            self.db_uptime_label,
-            self.db_other_stat_label,
-        ):
-            lbl.pack(fill="x", padx=12, pady=4)
+        summary_cards = [
+            ("Database", "#2C2C2C"),
+            ("Total Keys", "#18357E"),
+            ("Expiring", "#4EAFFA"),
+            ("Persistent", "#058484"),
+        ]
+        self.summary_value_labels = {}
+        for title, color in summary_cards:
+            card = ctk.CTkFrame(self.summary_frame, fg_color=color, corner_radius=10)
+            card.pack(side="left", expand=True, fill="both", padx=8)
+            ctk.CTkLabel(card, text=title, font=("Arial", 12), text_color="white").pack(pady=(6, 0))
+            value_label = ctk.CTkLabel(card, text="--", font=("Arial", 18, "bold"), text_color="white")
+            value_label.pack(pady=(0, 10))
+            self.summary_value_labels[title] = value_label
 
         top_frame = ctk.CTkFrame(self, fg_color="#F0F0F0")
-        top_frame.pack(fill="x", pady=5)
+        top_frame.pack(fill="x", pady=(5, 2))
 
         ctk.CTkLabel(
             top_frame,
@@ -170,13 +167,18 @@ class RedisContentViewer(ctk.CTkFrame):
         self.page_size_dropdown.pack(side="left", padx=4)
 
         ctk.CTkButton(top_frame, text="Search", command=self.search_keys).pack(side="left", padx=4)
-        ctk.CTkButton(top_frame, text="Refresh", command=self.show_metadata).pack(side="right", padx=6)
-        ctk.CTkButton(top_frame, text="Change Database", command=self.show_database_selector).pack(side="right", padx=6)
+
+        action_frame = ctk.CTkFrame(self, fg_color="#F0F0F0")
+        action_frame.pack(fill="x", pady=(0, 6))
+
+        ctk.CTkButton(action_frame, text="Graphs", command=self.show_graphs_popup).pack(side="left", padx=10, pady=6)
+        ctk.CTkButton(action_frame, text="Refresh", command=self.show_metadata).pack(side="left", padx=6, pady=6)
+        ctk.CTkButton(action_frame, text="Change Database", command=self.show_database_selector).pack(side="right", padx=10, pady=6)
 
         self.export_btn = ctk.CTkButton(
-            top_frame, text="Export Selected", command=self.export_selected, state="disabled"
+            action_frame, text="Export Selected", command=self.export_selected, state="disabled"
         )
-        self.export_btn.pack(side="right", padx=6)
+        self.export_btn.pack(side="right", padx=6, pady=6)
 
         self.keys_value_frame = ctk.CTkFrame(self, fg_color="#FFFFFF")
         self.keys_value_frame.pack(fill="both", expand=True, pady=6)
@@ -232,19 +234,27 @@ class RedisContentViewer(ctk.CTkFrame):
         self.show_metadata()
 
     def show_metadata(self):
-        self.current_meta = self.backend.get_metadata()
-        self.update_pie_chart(self.current_meta)
-        self.update_prefix_chart(self.current_meta)
-        self.update_stats(self.current_meta)
-        self.search_keys()
+        self.set_loading("Loading Redis metadata...")
+        try:
+            self.current_meta = self.backend.get_metadata()
+            self.update_stats(self.current_meta)
+            self.search_keys(show_loader=False)
+        finally:
+            self.clear_loading()
 
-    def search_keys(self):
-        pattern = self.search_entry.get().strip() or "*"
-        selected_type = self.type_var.get().strip()
-        self.current_page = 1
-        self.current_page_size = int(self.page_size_var.get())
-        self.load_keys_cache(pattern, selected_type)
-        self.render_keys_page()
+    def search_keys(self, show_loader=True):
+        if show_loader:
+            self.set_loading("Loading Redis keys...")
+        try:
+            pattern = self.search_entry.get().strip() or "*"
+            selected_type = self.type_var.get().strip()
+            self.current_page = 1
+            self.current_page_size = int(self.page_size_var.get())
+            self.load_keys_cache(pattern, selected_type)
+            self.render_keys_page()
+        finally:
+            if show_loader:
+                self.clear_loading()
 
     def load_keys_cache(self, pattern, selected_type):
         keys = self.backend.list_keys(pattern=pattern, limit=self.cache_limit)
@@ -353,52 +363,52 @@ class RedisContentViewer(ctk.CTkFrame):
             messagebox.showinfo("Export", "Export successful")
 
     def update_stats(self, meta):
-        self.db_total_keys_label.configure(text=f"Total keys: {meta.get('total_keys')}")
-        self.db_expiring_keys_label.configure(text=f"Expiring keys: {meta.get('expiring_keys')}")
-        self.db_persistent_keys_label.configure(text=f"Persistent keys: {meta.get('persistent_keys')}")
-        self.db_memory_used_label.configure(
-            text=f"Memory used: {round(meta.get('memory_used', 0) / (1024 * 1024), 2)} MB"
-        )
+        self.summary_value_labels["Database"].configure(text="DB {}".format(self.selected_db_index))
+        self.summary_value_labels["Total Keys"].configure(text=str(meta.get("total_keys")))
+        self.summary_value_labels["Expiring"].configure(text=str(meta.get("expiring_keys")))
+        self.summary_value_labels["Persistent"].configure(text=str(meta.get("persistent_keys")))
 
-        uptime = meta.get("uptime_seconds", 0)
-        self.db_uptime_label.configure(text=f"Server uptime: {uptime // 3600}h")
-        self.db_other_stat_label.configure(text=f"Total key types: {len(meta.get('type_counts', {}))}")
+    def show_graphs_popup(self):
+        if not self.current_meta:
+            return
 
-    def update_pie_chart(self, meta):
-        if self.chart_canvas:
-            self.chart_canvas.get_tk_widget().destroy()
+        popup = ctk.CTkToplevel(self)
+        popup.title("Redis Graphs")
+        popup.geometry("980x520")
 
-        data = meta.get("type_counts", {})
-        fig, ax = plt.subplots(figsize=(4, 4))
-        labels = list(data.keys())
-        values = list(data.values())
-        colors = [self.color_map.get(k, "#999999") for k in labels]
+        header = ctk.CTkFrame(popup, fg_color="#F0F0F0")
+        header.pack(fill="x", padx=10, pady=10)
+        ctk.CTkLabel(header, text="Redis Graphs", font=("Arial", 18, "bold")).pack(side="left", padx=10, pady=10)
+        ctk.CTkLabel(header, text="Sampled", font=("Arial", 12)).pack(side="right", padx=10, pady=10)
 
-        wedges, _, _ = ax.pie(values, colors=colors, autopct="%1.1f%%", startangle=90)
-        ax.legend(wedges, labels, title="Key Types", loc="center left", bbox_to_anchor=(1, 0.5))
-        ax.set_title("KEY TYPES DISTRIBUTION")
+        body = ctk.CTkFrame(popup, fg_color="#FFFFFF")
+        body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
-        self.chart_canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
-        self.chart_canvas.draw()
-        self.chart_canvas.get_tk_widget().pack(fill="both", expand=True)
-        self.chart_note_label.pack(side="bottom", pady=(0, 6))
-        plt.close(fig)
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+        fig.patch.set_facecolor("#FFFFFF")
 
-    def update_prefix_chart(self, meta):
-        if self.graph2_canvas:
-            self.graph2_canvas.get_tk_widget().destroy()
+        type_data = self.current_meta.get("type_counts", {})
+        type_labels = list(type_data.keys())
+        type_values = list(type_data.values())
+        type_colors = [self.color_map.get(k, "#999999") for k in type_labels]
 
-        data = dict(list(meta.get("top_prefixes", {}).items())[:5])
-        fig, ax = plt.subplots(figsize=(4, 4))
-        labels = list(data.keys())
-        values = list(data.values())
+        if type_labels:
+            wedges, _, _ = axes[0].pie(type_values, colors=type_colors, autopct="%1.1f%%", startangle=90)
+            axes[0].legend(wedges, type_labels, title="Key Types", loc="center left", bbox_to_anchor=(1, 0.5))
+        axes[0].set_title("Key Type Distribution")
 
-        wedges, _, _ = ax.pie(values, autopct="%1.1f%%", startangle=90)
-        ax.legend(wedges, labels, title="Prefixes", loc="center left", bbox_to_anchor=(1, 0.5))
-        ax.set_title("TOP KEY PREFIXES")
+        prefix_data = dict(list(self.current_meta.get("top_prefixes", {}).items())[:5])
+        prefix_labels = list(prefix_data.keys())
+        prefix_values = list(prefix_data.values())
+        if prefix_labels:
+            wedges, _, _ = axes[1].pie(prefix_values, autopct="%1.1f%%", startangle=90)
+            axes[1].legend(wedges, prefix_labels, title="Prefixes", loc="center left", bbox_to_anchor=(1, 0.5))
+        axes[1].set_title("Top Prefixes")
 
-        self.graph2_canvas = FigureCanvasTkAgg(fig, master=self.graph2_frame)
-        self.graph2_canvas.draw()
-        self.graph2_canvas.get_tk_widget().pack(fill="both", expand=True)
-        self.graph2_note_label.pack(side="bottom", pady=(0, 6))
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=body)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
+        ctk.CTkButton(popup, text="Close", command=popup.destroy).pack(pady=(0, 10))
         plt.close(fig)
