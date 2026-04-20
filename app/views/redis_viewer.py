@@ -7,7 +7,7 @@ import json
 from tksheet import Sheet
 from customtkinter import CTkTextbox
 
-from config import PREVIEW_LIMIT
+from config import PAGE_SIZES, PREVIEW_LIMIT
 
 
 class RedisContentViewer(ctk.CTkFrame):
@@ -18,6 +18,13 @@ class RedisContentViewer(ctk.CTkFrame):
         self.graph2_canvas = None
         self.current_meta = {}
         self.selected_db_index = None
+        self.current_page = 1
+        self.current_page_size = PREVIEW_LIMIT
+        self.total_records = 0
+        self.actual_total_records = 0
+        self.keys_cache = []
+        self.cache_note = ""
+        self.cache_limit = max(PAGE_SIZES) * 20
 
         self.color_map = {
             "string": "#DCE9A0",
@@ -99,12 +106,14 @@ class RedisContentViewer(ctk.CTkFrame):
 
         self.chart_frame = ctk.CTkFrame(self.dashboard_inner_frame, fg_color="#FFFFFF")
         self.chart_frame.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+        self.chart_note_label = ctk.CTkLabel(self.chart_frame, text="Sampled", font=("Arial", 11))
 
         self.stats_frame = ctk.CTkFrame(self.dashboard_inner_frame, fg_color="#EFEFEF")
         self.stats_frame.pack(side="left", fill="both", expand=True, padx=8, pady=8)
 
         self.graph2_frame = ctk.CTkFrame(self.dashboard_inner_frame, fg_color="#FFFFFF")
         self.graph2_frame.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+        self.graph2_note_label = ctk.CTkLabel(self.graph2_frame, text="Sampled", font=("Arial", 11))
 
         ctk.CTkLabel(self.stats_frame, text="METADATA", font=("Arial", 14, "bold")).pack(pady=(20, 10))
 
@@ -149,6 +158,17 @@ class RedisContentViewer(ctk.CTkFrame):
         self.type_dropdown.pack(side="left", padx=4)
         self.type_dropdown.set("")
 
+        ctk.CTkLabel(top_frame, text="Page size:").pack(side="left", padx=(10, 5))
+        self.page_size_var = ctk.StringVar(value=str(PREVIEW_LIMIT))
+        self.page_size_dropdown = ctk.CTkComboBox(
+            top_frame,
+            values=[str(size) for size in PAGE_SIZES],
+            variable=self.page_size_var,
+            width=100,
+            command=self.on_page_size_change
+        )
+        self.page_size_dropdown.pack(side="left", padx=4)
+
         ctk.CTkButton(top_frame, text="Search", command=self.search_keys).pack(side="left", padx=4)
         ctk.CTkButton(top_frame, text="Refresh", command=self.show_metadata).pack(side="right", padx=6)
         ctk.CTkButton(top_frame, text="Change Database", command=self.show_database_selector).pack(side="right", padx=6)
@@ -158,14 +178,6 @@ class RedisContentViewer(ctk.CTkFrame):
         )
         self.export_btn.pack(side="right", padx=6)
 
-        self.preview_label = ctk.CTkLabel(
-            self,
-            text="",
-            anchor="w",
-            font=("Arial", 12)
-        )
-        self.preview_label.pack(fill="x", padx=10, pady=(0, 5))
-
         self.keys_value_frame = ctk.CTkFrame(self, fg_color="#FFFFFF")
         self.keys_value_frame.pack(fill="both", expand=True, pady=6)
 
@@ -174,6 +186,26 @@ class RedisContentViewer(ctk.CTkFrame):
 
         self.keys_frame = ctk.CTkFrame(self.keys_value_frame, fg_color="#FFFFFF")
         self.keys_frame.grid(row=0, column=0, sticky="nsew", padx=5)
+
+        self.list_controls_frame = ctk.CTkFrame(self.keys_frame, fg_color="#FFFFFF")
+        self.list_controls_frame.pack(fill="x", pady=(0, 5))
+
+        self.preview_label = ctk.CTkLabel(
+            self.list_controls_frame,
+            text="",
+            anchor="w",
+            font=("Arial", 12)
+        )
+        self.preview_label.pack(side="left", padx=(0, 10))
+
+        self.pagination_frame = ctk.CTkFrame(self.list_controls_frame, fg_color="#FFFFFF")
+        self.prev_btn = ctk.CTkButton(self.pagination_frame, text="Previous", width=100, command=self.go_prev_page)
+        self.prev_btn.pack(side="left", padx=5)
+        self.page_indicator_label = ctk.CTkLabel(self.pagination_frame, text="")
+        self.page_indicator_label.pack(side="left", padx=10)
+        self.next_btn = ctk.CTkButton(self.pagination_frame, text="Next", width=100, command=self.go_next_page)
+        self.next_btn.pack(side="left", padx=5)
+        self.pagination_frame.pack(side="right")
 
         self.keys_sheet = Sheet(self.keys_frame, headers=["Key", "Type", "TTL", "Size"])
         self.keys_sheet.pack(fill="both", expand=True)
@@ -209,27 +241,76 @@ class RedisContentViewer(ctk.CTkFrame):
     def search_keys(self):
         pattern = self.search_entry.get().strip() or "*"
         selected_type = self.type_var.get().strip()
+        self.current_page = 1
+        self.current_page_size = int(self.page_size_var.get())
+        self.load_keys_cache(pattern, selected_type)
+        self.render_keys_page()
 
-        keys = self.backend.list_keys(pattern=pattern, limit=PREVIEW_LIMIT)
-        data = []
+    def load_keys_cache(self, pattern, selected_type):
+        keys = self.backend.list_keys(pattern=pattern, limit=self.cache_limit)
+        if selected_type:
+            keys = [key for key in keys if key.get("type") == selected_type]
 
-        for k in keys:
-            if selected_type and k.get("type") != selected_type:
-                continue
-            data.append([k["key"], k.get("type"), k.get("ttl"), f'{k.get("size", 0)}B'])
+        self.keys_cache = keys
+        self.actual_total_records = int(self.current_meta.get("total_keys", 0) or 0)
+        self.total_records = min(len(self.keys_cache), self.cache_limit)
+        self.cache_note = ""
+        if self.actual_total_records > self.cache_limit:
+            self.cache_note = " Showing first {} of {} keys.".format(self.cache_limit, self.actual_total_records)
+
+    def render_keys_page(self):
+        offset = (self.current_page - 1) * self.current_page_size
+        page_keys = self.keys_cache[offset: offset + self.current_page_size]
+        data = [
+            [k["key"], k.get("type"), k.get("ttl"), f'{k.get("size", 0)}B']
+            for k in page_keys
+        ]
 
         self.keys_sheet.set_sheet_data(data)
         self.apply_type_colors()
         self.export_btn.configure(state="normal" if data else "disabled")
 
-        total_keys = self.current_meta.get("total_keys", 0)
+        start = offset + 1 if self.total_records else 0
+        end = min(offset + len(page_keys), self.total_records)
+        note_suffix = self.cache_note if self.cache_note else ""
         self.preview_label.configure(
-            text="Showing {} of {} keys in DB {}".format(
-                len(data),
-                total_keys,
-                self.selected_db_index
+            text="Showing {}-{} of {} keys in DB {}{}".format(
+                start,
+                end,
+                self.total_records,
+                self.selected_db_index,
+                note_suffix
             )
         )
+        self.update_pagination_controls()
+
+    def update_pagination_controls(self):
+        if self.total_records <= 0:
+            self.pagination_frame.pack_forget()
+            return
+
+        total_pages = max(1, (self.total_records + self.current_page_size - 1) // self.current_page_size)
+        self.page_indicator_label.configure(text="Page {} of {}".format(self.current_page, total_pages))
+        self.prev_btn.configure(state="disabled" if self.current_page <= 1 else "normal")
+        self.next_btn.configure(state="disabled" if self.current_page >= total_pages else "normal")
+        self.pagination_frame.pack(side="right")
+
+    def on_page_size_change(self, _value):
+        self.current_page_size = int(self.page_size_var.get())
+        self.current_page = 1
+        if self.selected_db_index is not None:
+            self.render_keys_page()
+
+    def go_prev_page(self):
+        if self.current_page > 1:
+            self.current_page -= 1
+            self.render_keys_page()
+
+    def go_next_page(self):
+        total_pages = max(1, (self.total_records + self.current_page_size - 1) // self.current_page_size)
+        if self.current_page < total_pages:
+            self.current_page += 1
+            self.render_keys_page()
 
     def on_row_click(self, event=None):
         cell = self.keys_sheet.get_currently_selected()
@@ -300,6 +381,7 @@ class RedisContentViewer(ctk.CTkFrame):
         self.chart_canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
         self.chart_canvas.draw()
         self.chart_canvas.get_tk_widget().pack(fill="both", expand=True)
+        self.chart_note_label.pack(side="bottom", pady=(0, 6))
         plt.close(fig)
 
     def update_prefix_chart(self, meta):
@@ -318,4 +400,5 @@ class RedisContentViewer(ctk.CTkFrame):
         self.graph2_canvas = FigureCanvasTkAgg(fig, master=self.graph2_frame)
         self.graph2_canvas.draw()
         self.graph2_canvas.get_tk_widget().pack(fill="both", expand=True)
+        self.graph2_note_label.pack(side="bottom", pady=(0, 6))
         plt.close(fig)

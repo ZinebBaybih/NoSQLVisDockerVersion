@@ -46,13 +46,14 @@ class Neo4jConnector:
     def list_collections(self, db_name=None):
         return self.list_databases()
 
-    def list_documents(self, db_name, col_name):
+    def list_documents(self, db_name, col_name, offset=0, limit=PREVIEW_LIMIT):
         """Return node properties for a label"""
         with self.driver.session() as session:
             query = f"""
             MATCH (n:`{col_name}`)
             RETURN properties(n) AS props
-            LIMIT {PREVIEW_LIMIT}
+            SKIP {int(offset)}
+            LIMIT {int(limit)}
             """
             return [r["props"] for r in session.run(query)]
 

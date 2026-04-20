@@ -6,7 +6,7 @@ from collections import Counter
 import csv
 from tkinter import filedialog
 
-from config import PREVIEW_LIMIT
+from config import PAGE_SIZES, PREVIEW_LIMIT
 
 class MongoContentViewer:
     def __init__(self, parent, backend):
@@ -16,6 +16,11 @@ class MongoContentViewer:
         self.current_level = 'dbs'
         self.opened_db_btn_frame = None
         self.opened_col_btn_frame = None
+        self.current_page = 1
+        self.current_page_size = PREVIEW_LIMIT
+        self.total_records = 0
+        self.current_db_name = None
+        self.current_collection_name = None
 
         # Nettoyage du parent
         for widget in parent.winfo_children():
@@ -32,6 +37,21 @@ class MongoContentViewer:
         self.filter_entry.pack(fill="x", padx=20, pady=(15, 10))
         self.filter_var.trace("w", lambda *args: self.update_filter())
 
+        self.page_size_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.page_size_frame.pack(fill="x", padx=20, pady=(0, 8))
+
+        ctk.CTkLabel(self.page_size_frame, text="Page size:").pack(side="left", padx=(0, 8))
+        self.page_size_var = ctk.StringVar(value=str(PREVIEW_LIMIT))
+        self.page_size_dropdown = ctk.CTkComboBox(
+            self.page_size_frame,
+            values=[str(size) for size in PAGE_SIZES],
+            variable=self.page_size_var,
+            width=100,
+            command=self.on_page_size_change,
+        )
+        self.page_size_dropdown.pack(side="left")
+        self.page_size_frame.pack_forget()
+
         self.preview_label = ctk.CTkLabel(
             parent,
             text="",
@@ -44,6 +64,15 @@ class MongoContentViewer:
         self.elements_frame = ctk.CTkScrollableFrame(parent, fg_color="transparent")
         self.elements_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
+        self.pagination_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.prev_btn = ctk.CTkButton(self.pagination_frame, text="Previous", width=100, command=self.go_prev_page)
+        self.prev_btn.pack(side="left", padx=5)
+        self.page_indicator_label = ctk.CTkLabel(self.pagination_frame, text="")
+        self.page_indicator_label.pack(side="left", padx=10)
+        self.next_btn = ctk.CTkButton(self.pagination_frame, text="Next", width=100, command=self.go_next_page)
+        self.next_btn.pack(side="left", padx=5)
+        self.pagination_frame.pack_forget()
+
         # Bouton retour
         self.back_btn = ctk.CTkButton(parent, text="<- Retour", width=90, command=self.go_back)
         self.back_btn.pack_forget()
@@ -55,6 +84,41 @@ class MongoContentViewer:
     def clear_elements(self):
         for widget in self.elements_frame.winfo_children():
             widget.destroy()
+
+    def reset_pagination(self, total_records):
+        self.current_page = 1
+        self.total_records = int(total_records)
+        self.current_page_size = int(self.page_size_var.get())
+
+    def update_pagination_controls(self):
+        if self.current_level != "documents" or self.total_records <= 0:
+            self.pagination_frame.pack_forget()
+            return
+
+        total_pages = max(1, (self.total_records + self.current_page_size - 1) // self.current_page_size)
+        self.page_indicator_label.configure(
+            text="Page {} of {}".format(self.current_page, total_pages)
+        )
+        self.prev_btn.configure(state="disabled" if self.current_page <= 1 else "normal")
+        self.next_btn.configure(state="disabled" if self.current_page >= total_pages else "normal")
+        self.pagination_frame.pack(pady=(0, 5))
+
+    def on_page_size_change(self, _value):
+        self.current_page_size = int(self.page_size_var.get())
+        if self.current_level == "documents" and self.current_collection_name:
+            self.current_page = 1
+            self.render_documents_page()
+
+    def go_prev_page(self):
+        if self.current_page > 1:
+            self.current_page -= 1
+            self.render_documents_page()
+
+    def go_next_page(self):
+        total_pages = max(1, (self.total_records + self.current_page_size - 1) // self.current_page_size)
+        if self.current_page < total_pages:
+            self.current_page += 1
+            self.render_documents_page()
 
     def update_filter(self):
         text = self.filter_var.get().lower()
@@ -82,6 +146,8 @@ class MongoContentViewer:
     def show_dbs(self):
         self.clear_elements()
         self.preview_label.pack_forget()
+        self.page_size_frame.pack_forget()
+        self.pagination_frame.pack_forget()
         self.back_btn.pack_forget()
         self.history.clear()
         self.current_level = "dbs"
@@ -150,6 +216,8 @@ class MongoContentViewer:
     def show_collections(self, db_name):
         self.clear_elements()
         self.preview_label.pack_forget()
+        self.page_size_frame.pack_forget()
+        self.pagination_frame.pack_forget()
         self.current_level = "collections"
         self.history.append(("dbs", None))
         self.back_btn.pack(pady=5, anchor="w")
@@ -219,17 +287,32 @@ class MongoContentViewer:
         self.current_level = "documents"
         self.history.append(("collections", db_name))
         self.back_btn.pack(pady=5, anchor="w")
+        self.current_db_name = db_name
+        self.current_collection_name = col_name
+        self.reset_pagination(total_count)
+        self.page_size_frame.pack(fill="x", padx=20, pady=(0, 8))
+        self.preview_label.pack(fill="x", padx=20, pady=(0, 8))
+        self.render_documents_page()
 
+    def render_documents_page(self):
+        self.clear_elements()
+        offset = (self.current_page - 1) * self.current_page_size
         try:
-            docs = self.backend.list_documents(db_name, col_name)
+            docs = self.backend.list_documents(
+                self.current_db_name,
+                self.current_collection_name,
+                offset=offset,
+                limit=self.current_page_size,
+            )
         except Exception as e:
             print("Erreur list_documents:", e)
             docs = []
 
+        start = offset + 1 if self.total_records else 0
+        end = min(offset + len(docs), self.total_records)
         self.preview_label.configure(
-            text="Showing {} of {} documents".format(min(len(docs), PREVIEW_LIMIT), total_count)
+            text="Showing {}-{} of {} documents".format(start, end, self.total_records)
         )
-        self.preview_label.pack(fill="x", padx=20, pady=(0, 8))
 
         for doc in docs:
             frame = ctk.CTkFrame(self.elements_frame, fg_color="#e3e3e3", corner_radius=10)
@@ -244,6 +327,8 @@ class MongoContentViewer:
             )
             label.pack(side="left", padx=10, pady=6)
             frame.doc_name = str(doc)
+
+        self.update_pagination_controls()
 
     # ---------------------- GRAPHIQUES ----------------------
     def show_db_graph(self, db_name):

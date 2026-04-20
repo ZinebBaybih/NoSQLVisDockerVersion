@@ -6,7 +6,7 @@ from tkinter import filedialog
 import matplotlib.pyplot as plt
 import networkx as nx
 
-from config import PREVIEW_LIMIT
+from config import PAGE_SIZES, PREVIEW_LIMIT
 
 class Neo4jContentViewer(ctk.CTkFrame):
     """Enhanced Neo4j viewer with node & relationship statistics."""
@@ -17,6 +17,10 @@ class Neo4jContentViewer(ctk.CTkFrame):
         self.backend = backend
         self.selected_label = None
         self.selected_total_nodes = 0
+        self.label_counts = {}
+        self.current_page = 1
+        self.current_page_size = PREVIEW_LIMIT
+        self.total_records = 0
 
         self.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -66,12 +70,26 @@ class Neo4jContentViewer(ctk.CTkFrame):
         self.back_btn = ctk.CTkButton(btn_frame, text="⬅ Back", command=self.go_back, state="disabled")
         self.back_btn.pack(side="left", padx=10)
 
+        self.page_size_frame = ctk.CTkFrame(self, fg_color="#ffffff")
+        self.page_size_frame.pack(fill="x", pady=(0, 6))
+        ctk.CTkLabel(self.page_size_frame, text="Page size:").pack(side="left", padx=10)
+        self.page_size_var = ctk.StringVar(value=str(PREVIEW_LIMIT))
+        self.page_size_dropdown = ctk.CTkComboBox(
+            self.page_size_frame,
+            values=[str(size) for size in PAGE_SIZES],
+            variable=self.page_size_var,
+            width=100,
+            command=self.on_page_size_change,
+        )
+        self.page_size_dropdown.pack(side="left")
+        self.page_size_frame.pack_forget()
+
         self.preview_label = ctk.CTkLabel(self, text="", anchor="w", font=("Arial", 12))
         self.preview_label.pack(fill="x", pady=(0, 4))
 
         self.graph_note_label = ctk.CTkLabel(
             self,
-            text="Graph preview: up to {} nodes shown".format(PREVIEW_LIMIT),
+            text="Graph preview - first {} nodes shown".format(PREVIEW_LIMIT),
             anchor="w",
             font=("Arial", 12)
         )
@@ -81,6 +99,15 @@ class Neo4jContentViewer(ctk.CTkFrame):
         self.nodes_tree = ttk.Treeview(self, show="headings")
         self.nodes_tree.pack(fill="both", expand=True, pady=5)
 
+        self.pagination_frame = ctk.CTkFrame(self, fg_color="#ffffff")
+        self.prev_btn = ctk.CTkButton(self.pagination_frame, text="Previous", width=100, command=self.go_prev_page)
+        self.prev_btn.pack(side="left", padx=5)
+        self.page_indicator_label = ctk.CTkLabel(self.pagination_frame, text="")
+        self.page_indicator_label.pack(side="left", padx=10)
+        self.next_btn = ctk.CTkButton(self.pagination_frame, text="Next", width=100, command=self.go_next_page)
+        self.next_btn.pack(side="left", padx=5)
+        self.pagination_frame.pack_forget()
+
         self.show_labels()
 
 
@@ -88,6 +115,7 @@ class Neo4jContentViewer(ctk.CTkFrame):
         """Fetch and display label statistics (nodes + relations)."""
         for i in self.labels_tree.get_children():
             self.labels_tree.delete(i)
+        self.label_counts = {}
 
         try:
             labels = self.backend.client.list_databases()
@@ -101,6 +129,8 @@ class Neo4jContentViewer(ctk.CTkFrame):
                     rel_count = len(rels)
                 except Exception:
                     rel_count = 0
+
+                self.label_counts[label_name] = node_count
 
                 self.labels_tree.insert(
                     "", "end",
@@ -119,14 +149,13 @@ class Neo4jContentViewer(ctk.CTkFrame):
 
         values = self.labels_tree.item(selected, "values")
         self.selected_label = values[0]
-        self.selected_total_nodes = int(values[1])
+        self.selected_total_nodes = self.label_counts.get(self.selected_label, int(values[1]))
+        self.total_records = self.selected_total_nodes
+        self.current_page = 1
+        self.current_page_size = int(self.page_size_var.get())
+        self.page_size_frame.pack(fill="x", pady=(0, 6))
 
-        try:
-            nodes = self.backend.client.list_documents(None, self.selected_label)
-            self.display_nodes(nodes)
-        except Exception as e:
-            messagebox.showerror("Erreur", f"Erreur list_documents: {e}")
-            return
+        self.render_nodes_page()
 
         self.export_btn.configure(state="normal")
         self.graph_btn.configure(state="normal")
@@ -152,9 +181,54 @@ class Neo4jContentViewer(ctk.CTkFrame):
         for n in nodes:
             self.nodes_tree.insert("", "end", values=[n.get(c, "") for c in columns])
 
+        offset = (self.current_page - 1) * self.current_page_size
+        start = offset + 1 if self.total_records else 0
+        end = min(offset + len(nodes), self.total_records)
         self.preview_label.configure(
-            text="Showing {} of {} nodes".format(len(nodes), self.selected_total_nodes)
+            text="Showing {}-{} of {} nodes".format(start, end, self.selected_total_nodes)
         )
+
+        self.update_pagination_controls()
+
+    def render_nodes_page(self):
+        try:
+            nodes = self.backend.client.list_documents(
+                None,
+                self.selected_label,
+                offset=(self.current_page - 1) * self.current_page_size,
+                limit=self.current_page_size,
+            )
+            self.display_nodes(nodes)
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Erreur list_documents: {e}")
+
+    def update_pagination_controls(self):
+        if not self.selected_label or self.total_records <= 0:
+            self.pagination_frame.pack_forget()
+            return
+
+        total_pages = max(1, (self.total_records + self.current_page_size - 1) // self.current_page_size)
+        self.page_indicator_label.configure(text="Page {} of {}".format(self.current_page, total_pages))
+        self.prev_btn.configure(state="disabled" if self.current_page <= 1 else "normal")
+        self.next_btn.configure(state="disabled" if self.current_page >= total_pages else "normal")
+        self.pagination_frame.pack(fill="x", pady=(0, 5))
+
+    def on_page_size_change(self, _value):
+        self.current_page_size = int(self.page_size_var.get())
+        if self.selected_label:
+            self.current_page = 1
+            self.render_nodes_page()
+
+    def go_prev_page(self):
+        if self.current_page > 1:
+            self.current_page -= 1
+            self.render_nodes_page()
+
+    def go_next_page(self):
+        total_pages = max(1, (self.total_records + self.current_page_size - 1) // self.current_page_size)
+        if self.current_page < total_pages:
+            self.current_page += 1
+            self.render_nodes_page()
 
     def export_label(self):
         if not self.selected_label:
@@ -280,8 +354,12 @@ class Neo4jContentViewer(ctk.CTkFrame):
     def go_back(self):
         self.selected_label = None
         self.selected_total_nodes = 0
+        self.total_records = 0
+        self.current_page = 1
         self.nodes_tree.delete(*self.nodes_tree.get_children())
         self.preview_label.configure(text="")
+        self.page_size_frame.pack_forget()
+        self.pagination_frame.pack_forget()
         self.export_btn.configure(state="disabled")
         self.graph_btn.configure(state="disabled")
         self.back_btn.configure(state="disabled")

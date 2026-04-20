@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import csv
 
-from config import PREVIEW_LIMIT
+from config import PAGE_SIZES, PREVIEW_LIMIT
 
 
 class CassandraContentViewer(ctk.CTkFrame):
@@ -17,6 +17,11 @@ class CassandraContentViewer(ctk.CTkFrame):
     def __init__(self, master, backend, **kwargs):
         super().__init__(master, **kwargs)
         self.backend = backend  # NoSQLBackend instance
+        self.current_page = 1
+        self.current_page_size = PREVIEW_LIMIT
+        self.total_records = 0
+        self.current_keyspace = None
+        self.current_table = None
 
         self.configure(fg_color="#FFFFFF")
         self.pack(fill="both", expand=True, padx=10, pady=10)
@@ -125,6 +130,17 @@ class CassandraContentViewer(ctk.CTkFrame):
         )
         self.table_dropdown.pack(side="left", padx=5)
 
+        ctk.CTkLabel(self.controls_frame, text="Page size:").pack(side="left", padx=(10, 5))
+        self.page_size_var = ctk.StringVar(value=str(PREVIEW_LIMIT))
+        self.page_size_dropdown = ctk.CTkComboBox(
+            self.controls_frame,
+            values=[str(size) for size in PAGE_SIZES],
+            variable=self.page_size_var,
+            width=100,
+            command=self.on_page_size_change
+        )
+        self.page_size_dropdown.pack(side="left", padx=5)
+
         self.refresh_btn = ctk.CTkButton(
             self.controls_frame, text="Refresh Keyspaces", command=self.refresh_keyspaces
         )
@@ -171,19 +187,21 @@ class CassandraContentViewer(ctk.CTkFrame):
         self.search_btn = ctk.CTkButton(self.search_frame, text="Search", command=self.search_table)
         self.search_btn.pack(side="left", padx=5)
 
-        self.preview_label = ctk.CTkLabel(
-            self,
-            text="",
-            anchor="w",
-            font=("Arial", 12)
-        )
-        self.preview_label.pack(fill="x", padx=10, pady=(0, 5))
-
-
         # ------------------------------------------------------ SHEET FRAME ------------------------------------------------------
         self.sheet_frame = ctk.CTkFrame(self, fg_color="#F8F8F8")
         self.sheet_frame.pack(fill="both", expand=True, padx=10, pady=10)
         self.sheet_frame.pack_propagate(True)
+
+        self.table_controls_frame = ctk.CTkFrame(self.sheet_frame, fg_color="#F8F8F8")
+        self.table_controls_frame.pack(fill="x", pady=(0, 5))
+
+        self.preview_label = ctk.CTkLabel(
+            self.table_controls_frame,
+            text="",
+            anchor="w",
+            font=("Arial", 12)
+        )
+        self.preview_label.pack(side="left", padx=(0, 10))
 
         # --- SHEET ---
         self.sheet = Sheet(
@@ -210,6 +228,15 @@ class CassandraContentViewer(ctk.CTkFrame):
             "column_width_resize",
             "stretch_column_to_fit" 
         ))
+
+        self.pagination_frame = ctk.CTkFrame(self.table_controls_frame, fg_color="#F8F8F8")
+        self.prev_btn = ctk.CTkButton(self.pagination_frame, text="Previous", width=100, command=self.go_prev_page)
+        self.prev_btn.pack(side="left", padx=5)
+        self.page_indicator_label = ctk.CTkLabel(self.pagination_frame, text="")
+        self.page_indicator_label.pack(side="left", padx=10)
+        self.next_btn = ctk.CTkButton(self.pagination_frame, text="Next", width=100, command=self.go_next_page)
+        self.next_btn.pack(side="left", padx=5)
+        self.pagination_frame.pack(side="right")
 
 
 
@@ -262,36 +289,78 @@ class CassandraContentViewer(ctk.CTkFrame):
 
     def on_table_change(self, value):
         keyspace = self.keyspace_dropdown.get()
-        data = self.get_sample_data(keyspace, value, limit=PREVIEW_LIMIT)
+        self.current_keyspace = keyspace
+        self.current_table = value
+        self.total_records = self.backend.count_rows(keyspace, value)
+        self.current_page = 1
+        self.current_page_size = int(self.page_size_var.get())
+        self.render_table_page()
+        self.update_dashboard()
+
+    def render_table_page(self):
+        if not self.current_keyspace or not self.current_table:
+            self.pagination_frame.pack_forget()
+            return
+
+        offset = (self.current_page - 1) * self.current_page_size
+
+        # Cassandra CQL has no native OFFSET, so we fetch enough rows and slice locally.
+        data = self.get_sample_data(
+            self.current_keyspace,
+            self.current_table,
+            limit=offset + self.current_page_size
+        )
+        data = data[offset: offset + self.current_page_size]
 
         if not data:
             self.sheet.set_sheet_data([])
             self.sheet.headers([])
             self.export_btn.configure(state="disabled")
-            self.preview_label.configure(text="Preview: showing 0 rows - use Export for full data")
+            self.preview_label.configure(text="Showing 0 of {} rows".format(max(self.total_records, 0)))
+            self.update_pagination_controls()
             return
 
-        # Get headers from first row of data
         headers = list(data[0].keys())
         rows = [list(row.values()) for row in data]
-
-        # Set headers in the sheet (tksheet handles headers separately)
         self.sheet.headers(headers)
-        self.sheet.set_sheet_data(rows)  # only the data, not headers as first row
-
-        # Enable export button if there are rows
-        if rows:
-            self.export_btn.configure(state="normal")
-        else:
-            self.export_btn.configure(state="disabled")
-
-        self.preview_label.configure(
-            text="Preview: showing {} rows - use Export for full data".format(len(rows))
-        )
-        
+        self.sheet.set_sheet_data(rows)
+        self.export_btn.configure(state="normal" if rows else "disabled")
         self.column_dropdown.configure(values=headers)
 
-        self.update_dashboard()
+        start = offset + 1 if self.total_records > 0 else 0
+        end = min(offset + len(rows), self.total_records) if self.total_records > 0 else len(rows)
+        self.preview_label.configure(
+            text="Showing {}-{} of {} rows".format(start, end, self.total_records)
+        )
+        self.update_pagination_controls()
+
+    def update_pagination_controls(self):
+        if not self.current_table or self.total_records <= 0:
+            self.pagination_frame.pack_forget()
+            return
+
+        total_pages = max(1, (self.total_records + self.current_page_size - 1) // self.current_page_size)
+        self.page_indicator_label.configure(text="Page {} of {}".format(self.current_page, total_pages))
+        self.prev_btn.configure(state="disabled" if self.current_page <= 1 else "normal")
+        self.next_btn.configure(state="disabled" if self.current_page >= total_pages else "normal")
+        self.pagination_frame.pack(side="right")
+
+    def on_page_size_change(self, _value):
+        self.current_page_size = int(self.page_size_var.get())
+        if self.current_table:
+            self.current_page = 1
+            self.render_table_page()
+
+    def go_prev_page(self):
+        if self.current_page > 1:
+            self.current_page -= 1
+            self.render_table_page()
+
+    def go_next_page(self):
+        total_pages = max(1, (self.total_records + self.current_page_size - 1) // self.current_page_size)
+        if self.current_page < total_pages:
+            self.current_page += 1
+            self.render_table_page()
 
 
     def refresh_keyspaces(self):

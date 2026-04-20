@@ -36,9 +36,10 @@ class MongoConnector:
             for c in db.list_collection_names()
         ]
 
-    def list_documents(self, db_name, col_name):
+    def list_documents(self, db_name, col_name, offset=0, limit=PREVIEW_LIMIT):
         return list(
             self.client[db_name][col_name]
             .find({}, {"_id": 0})
-            .limit(PREVIEW_LIMIT)
+            .skip(int(offset))
+            .limit(int(limit))
         )

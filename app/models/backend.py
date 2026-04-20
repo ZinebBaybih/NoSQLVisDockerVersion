@@ -76,8 +76,8 @@ class NoSQLBackend:
     def list_collections(self, db_name):
         return self.client.list_collections(db_name)
 
-    def list_documents(self, db_name, col_name):
-        return self.client.list_documents(db_name, col_name)
+    def list_documents(self, db_name, col_name, *args, **kwargs):
+        return self.client.list_documents(db_name, col_name, *args, **kwargs)
 
     def get_metadata(self):
         return self.client.get_metadata()
