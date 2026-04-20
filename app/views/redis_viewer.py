@@ -7,6 +7,8 @@ import json
 from tksheet import Sheet
 from customtkinter import CTkTextbox
 
+from config import PREVIEW_LIMIT
+
 
 class RedisContentViewer(ctk.CTkFrame):
     def __init__(self, master, backend, **kwargs):
@@ -14,6 +16,8 @@ class RedisContentViewer(ctk.CTkFrame):
         self.backend = backend
         self.chart_canvas = None
         self.graph2_canvas = None
+        self.current_meta = {}
+        self.selected_db_index = None
 
         self.color_map = {
             "string": "#DCE9A0",
@@ -27,7 +31,66 @@ class RedisContentViewer(ctk.CTkFrame):
         self.configure(fg_color="#FFFFFF")
         self.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # ===================== DASHBOARD =====================
+        self.show_database_selector()
+
+    def clear_view(self):
+        for widget in self.winfo_children():
+            widget.destroy()
+
+    def show_database_selector(self):
+        self.clear_view()
+
+        ctk.CTkLabel(
+            self,
+            text="Select Redis Database",
+            font=("Arial", 20, "bold")
+        ).pack(pady=(20, 10))
+
+        ctk.CTkLabel(
+            self,
+            text="Choose a Redis logical database to explore.",
+            font=("Arial", 12)
+        ).pack(pady=(0, 15))
+
+        selector_frame = ctk.CTkScrollableFrame(self, fg_color="#F8F8F8")
+        selector_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        try:
+            databases = [
+                db for db in self.backend.list_databases()
+                if db.get("count") and db.get("count") > 0
+            ]
+        except Exception as e:
+            messagebox.showerror("Error", f"Cannot load Redis databases: {e}")
+            databases = []
+
+        if not databases:
+            ctk.CTkLabel(
+                selector_frame,
+                text="No non-empty Redis databases found.",
+                font=("Arial", 13)
+            ).pack(pady=20)
+            return
+
+        for db in databases:
+            ctk.CTkButton(
+                selector_frame,
+                text="{} - {} keys".format(db["name"], db["count"]),
+                command=lambda index=db["index"]: self.select_database(index),
+                height=40
+            ).pack(fill="x", padx=10, pady=8)
+
+    def select_database(self, db_index):
+        try:
+            self.backend.switch_db(db_index)
+            self.selected_db_index = db_index
+            self.show_dashboard()
+        except Exception as e:
+            messagebox.showerror("Error", f"Cannot switch Redis database: {e}")
+
+    def show_dashboard(self):
+        self.clear_view()
+
         self.dashboard_frame = ctk.CTkFrame(self, fg_color="#F0F0F0")
         self.dashboard_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -43,7 +106,6 @@ class RedisContentViewer(ctk.CTkFrame):
         self.graph2_frame = ctk.CTkFrame(self.dashboard_inner_frame, fg_color="#FFFFFF")
         self.graph2_frame.pack(side="left", fill="both", expand=True, padx=8, pady=8)
 
-        # ===================== METADATA =====================
         ctk.CTkLabel(self.stats_frame, text="METADATA", font=("Arial", 14, "bold")).pack(pady=(20, 10))
 
         self.db_total_keys_label = ctk.CTkLabel(self.stats_frame, text="Total keys: --", anchor="w")
@@ -66,6 +128,12 @@ class RedisContentViewer(ctk.CTkFrame):
         top_frame = ctk.CTkFrame(self, fg_color="#F0F0F0")
         top_frame.pack(fill="x", pady=5)
 
+        ctk.CTkLabel(
+            top_frame,
+            text="Exploring DB {}".format(self.selected_db_index),
+            font=("Arial", 12, "bold")
+        ).pack(side="left", padx=10)
+
         ctk.CTkLabel(top_frame, text="Search pattern:").pack(side="left", padx=10)
         self.search_entry = ctk.CTkEntry(top_frame, placeholder_text="e.g. user:*")
         self.search_entry.pack(side="left", padx=4)
@@ -83,11 +151,20 @@ class RedisContentViewer(ctk.CTkFrame):
 
         ctk.CTkButton(top_frame, text="Search", command=self.search_keys).pack(side="left", padx=4)
         ctk.CTkButton(top_frame, text="Refresh", command=self.show_metadata).pack(side="right", padx=6)
+        ctk.CTkButton(top_frame, text="Change Database", command=self.show_database_selector).pack(side="right", padx=6)
 
         self.export_btn = ctk.CTkButton(
             top_frame, text="Export Selected", command=self.export_selected, state="disabled"
         )
         self.export_btn.pack(side="right", padx=6)
+
+        self.preview_label = ctk.CTkLabel(
+            self,
+            text="",
+            anchor="w",
+            font=("Arial", 12)
+        )
+        self.preview_label.pack(fill="x", padx=10, pady=(0, 5))
 
         self.keys_value_frame = ctk.CTkFrame(self, fg_color="#FFFFFF")
         self.keys_value_frame.pack(fill="both", expand=True, pady=6)
@@ -122,19 +199,18 @@ class RedisContentViewer(ctk.CTkFrame):
 
         self.show_metadata()
 
-
     def show_metadata(self):
-        meta = self.backend.get_metadata()
-        self.update_pie_chart(meta)
-        self.update_prefix_chart(meta)
-        self.update_stats(meta)
+        self.current_meta = self.backend.get_metadata()
+        self.update_pie_chart(self.current_meta)
+        self.update_prefix_chart(self.current_meta)
+        self.update_stats(self.current_meta)
         self.search_keys()
 
     def search_keys(self):
         pattern = self.search_entry.get().strip() or "*"
         selected_type = self.type_var.get().strip()
 
-        keys = self.backend.list_keys(pattern=pattern, limit=10000)
+        keys = self.backend.list_keys(pattern=pattern, limit=PREVIEW_LIMIT)
         data = []
 
         for k in keys:
@@ -146,6 +222,14 @@ class RedisContentViewer(ctk.CTkFrame):
         self.apply_type_colors()
         self.export_btn.configure(state="normal" if data else "disabled")
 
+        total_keys = self.current_meta.get("total_keys", 0)
+        self.preview_label.configure(
+            text="Showing {} of {} keys in DB {}".format(
+                len(data),
+                total_keys,
+                self.selected_db_index
+            )
+        )
 
     def on_row_click(self, event=None):
         cell = self.keys_sheet.get_currently_selected()
@@ -169,7 +253,6 @@ class RedisContentViewer(ctk.CTkFrame):
         self.value_text.insert("0.0", str(val))
         self.value_text.configure(state="disabled")
 
-
     def apply_type_colors(self):
         for row in range(len(self.keys_sheet.get_sheet_data())):
             key_type = self.keys_sheet.get_cell_data(row, 1)
@@ -187,7 +270,6 @@ class RedisContentViewer(ctk.CTkFrame):
         if path:
             self.backend.export_keys_to_csv(keys, path)
             messagebox.showinfo("Export", "Export successful")
-
 
     def update_stats(self, meta):
         self.db_total_keys_label.configure(text=f"Total keys: {meta.get('total_keys')}")

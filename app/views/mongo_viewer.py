@@ -6,6 +6,8 @@ from collections import Counter
 import csv
 from tkinter import filedialog
 
+from config import PREVIEW_LIMIT
+
 class MongoContentViewer:
     def __init__(self, parent, backend):
         self.parent = parent
@@ -29,6 +31,14 @@ class MongoContentViewer:
         )
         self.filter_entry.pack(fill="x", padx=20, pady=(15, 10))
         self.filter_var.trace("w", lambda *args: self.update_filter())
+
+        self.preview_label = ctk.CTkLabel(
+            parent,
+            text="",
+            anchor="w",
+            font=ctk.CTkFont(size=12)
+        )
+        self.preview_label.pack_forget()
 
         # Zone scrollable
         self.elements_frame = ctk.CTkScrollableFrame(parent, fg_color="transparent")
@@ -71,6 +81,7 @@ class MongoContentViewer:
     # ---------------------- DATABASES ----------------------
     def show_dbs(self):
         self.clear_elements()
+        self.preview_label.pack_forget()
         self.back_btn.pack_forget()
         self.history.clear()
         self.current_level = "dbs"
@@ -138,6 +149,7 @@ class MongoContentViewer:
     # ---------------------- COLLECTIONS ----------------------
     def show_collections(self, db_name):
         self.clear_elements()
+        self.preview_label.pack_forget()
         self.current_level = "collections"
         self.history.append(("dbs", None))
         self.back_btn.pack(pady=5, anchor="w")
@@ -173,7 +185,7 @@ class MongoContentViewer:
 
         view_btn = ctk.CTkButton(
             btn_frame, text="Aperçu", width=80,
-            command=lambda c=col["name"]: self.show_documents(db_name, c)
+            command=lambda c=col["name"], total=col.get("count", 0): self.show_documents(db_name, c, total)
         )
         graph_btn = ctk.CTkButton(
             btn_frame, text="Graph", width=80,
@@ -202,7 +214,7 @@ class MongoContentViewer:
         frame.bind("<Button-1>", toggle_buttons)
 
     # ---------------------- DOCUMENTS ----------------------
-    def show_documents(self, db_name, col_name):
+    def show_documents(self, db_name, col_name, total_count=0):
         self.clear_elements()
         self.current_level = "documents"
         self.history.append(("collections", db_name))
@@ -213,6 +225,11 @@ class MongoContentViewer:
         except Exception as e:
             print("Erreur list_documents:", e)
             docs = []
+
+        self.preview_label.configure(
+            text="Showing {} of {} documents".format(min(len(docs), PREVIEW_LIMIT), total_count)
+        )
+        self.preview_label.pack(fill="x", padx=20, pady=(0, 8))
 
         for doc in docs:
             frame = ctk.CTkFrame(self.elements_frame, fg_color="#e3e3e3", corner_radius=10)

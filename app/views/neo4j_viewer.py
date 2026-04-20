@@ -6,6 +6,8 @@ from tkinter import filedialog
 import matplotlib.pyplot as plt
 import networkx as nx
 
+from config import PREVIEW_LIMIT
+
 class Neo4jContentViewer(ctk.CTkFrame):
     """Enhanced Neo4j viewer with node & relationship statistics."""
 
@@ -14,6 +16,7 @@ class Neo4jContentViewer(ctk.CTkFrame):
         super().__init__(master, fg_color="#ffffff", **kwargs)  # background color
         self.backend = backend
         self.selected_label = None
+        self.selected_total_nodes = 0
 
         self.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -63,6 +66,17 @@ class Neo4jContentViewer(ctk.CTkFrame):
         self.back_btn = ctk.CTkButton(btn_frame, text="⬅ Back", command=self.go_back, state="disabled")
         self.back_btn.pack(side="left", padx=10)
 
+        self.preview_label = ctk.CTkLabel(self, text="", anchor="w", font=("Arial", 12))
+        self.preview_label.pack(fill="x", pady=(0, 4))
+
+        self.graph_note_label = ctk.CTkLabel(
+            self,
+            text="Graph preview: up to {} nodes shown".format(PREVIEW_LIMIT),
+            anchor="w",
+            font=("Arial", 12)
+        )
+        self.graph_note_label.pack(fill="x", pady=(0, 6))
+
         # ---------------- Node Details ----------------
         self.nodes_tree = ttk.Treeview(self, show="headings")
         self.nodes_tree.pack(fill="both", expand=True, pady=5)
@@ -105,6 +119,7 @@ class Neo4jContentViewer(ctk.CTkFrame):
 
         values = self.labels_tree.item(selected, "values")
         self.selected_label = values[0]
+        self.selected_total_nodes = int(values[1])
 
         try:
             nodes = self.backend.client.list_documents(None, self.selected_label)
@@ -136,6 +151,10 @@ class Neo4jContentViewer(ctk.CTkFrame):
 
         for n in nodes:
             self.nodes_tree.insert("", "end", values=[n.get(c, "") for c in columns])
+
+        self.preview_label.configure(
+            text="Showing {} of {} nodes".format(len(nodes), self.selected_total_nodes)
+        )
 
     def export_label(self):
         if not self.selected_label:
@@ -260,7 +279,9 @@ class Neo4jContentViewer(ctk.CTkFrame):
 
     def go_back(self):
         self.selected_label = None
+        self.selected_total_nodes = 0
         self.nodes_tree.delete(*self.nodes_tree.get_children())
+        self.preview_label.configure(text="")
         self.export_btn.configure(state="disabled")
         self.graph_btn.configure(state="disabled")
         self.back_btn.configure(state="disabled")

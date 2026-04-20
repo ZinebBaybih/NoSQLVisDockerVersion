@@ -1,6 +1,8 @@
 # app/models/connectors/mongo_connector.py
 from pymongo import MongoClient
 
+from config import PREVIEW_LIMIT
+
 
 class MongoConnector:
     def __init__(self, host="localhost", port=27017, user=None, password=None):
@@ -38,5 +40,5 @@ class MongoConnector:
         return list(
             self.client[db_name][col_name]
             .find({}, {"_id": 0})
-            .limit(50)
+            .limit(PREVIEW_LIMIT)
         )

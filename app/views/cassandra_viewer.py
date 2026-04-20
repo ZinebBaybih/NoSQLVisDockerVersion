@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import csv
 
+from config import PREVIEW_LIMIT
+
 
 class CassandraContentViewer(ctk.CTkFrame):
     """Cassandra viewer with dashboard"""
@@ -56,7 +58,7 @@ class CassandraContentViewer(ctk.CTkFrame):
         self.user_tables_label = ctk.CTkLabel(card3, text="0", font=("Arial", 18, "bold"), text_color="white")
         self.user_tables_label.pack(pady=(0, 10))
 
-        # CARD 4 - Avg Rows Per Table (Sampled)
+        # CARD 4 - Avg Rows Per Table
         card4 = ctk.CTkFrame(self.stats_banner, fg_color="#058484", corner_radius=10)  # light purple
         card4.pack(side="left", expand=True, fill="both", padx=8)
         ctk.CTkLabel(card4, text="Avg Rows/Table", font=("Arial", 12), text_color="white").pack(pady=(5, 0))
@@ -169,6 +171,14 @@ class CassandraContentViewer(ctk.CTkFrame):
         self.search_btn = ctk.CTkButton(self.search_frame, text="Search", command=self.search_table)
         self.search_btn.pack(side="left", padx=5)
 
+        self.preview_label = ctk.CTkLabel(
+            self,
+            text="",
+            anchor="w",
+            font=("Arial", 12)
+        )
+        self.preview_label.pack(fill="x", padx=10, pady=(0, 5))
+
 
         # ------------------------------------------------------ SHEET FRAME ------------------------------------------------------
         self.sheet_frame = ctk.CTkFrame(self, fg_color="#F8F8F8")
@@ -229,7 +239,7 @@ class CassandraContentViewer(ctk.CTkFrame):
             messagebox.showerror("Error", f"Cannot fetch tables: {e}")
             return []
 
-    def get_sample_data(self, keyspace, table, limit=20):
+    def get_sample_data(self, keyspace, table, limit=PREVIEW_LIMIT):
         try:
             return self.backend.fetch_sample(keyspace, table, limit)
         except Exception as e:
@@ -252,12 +262,13 @@ class CassandraContentViewer(ctk.CTkFrame):
 
     def on_table_change(self, value):
         keyspace = self.keyspace_dropdown.get()
-        data = self.get_sample_data(keyspace, value, limit=20)
+        data = self.get_sample_data(keyspace, value, limit=PREVIEW_LIMIT)
 
         if not data:
             self.sheet.set_sheet_data([])
             self.sheet.headers([])
             self.export_btn.configure(state="disabled")
+            self.preview_label.configure(text="Preview: showing 0 rows - use Export for full data")
             return
 
         # Get headers from first row of data
@@ -273,6 +284,10 @@ class CassandraContentViewer(ctk.CTkFrame):
             self.export_btn.configure(state="normal")
         else:
             self.export_btn.configure(state="disabled")
+
+        self.preview_label.configure(
+            text="Preview: showing {} rows - use Export for full data".format(len(rows))
+        )
         
         self.column_dropdown.configure(values=headers)
 
@@ -348,24 +363,30 @@ class CassandraContentViewer(ctk.CTkFrame):
         # --- Row Sampling Statistics ---
         rows_per_table = []
         largest_table = ("-", 0)
+        count_unavailable = False
 
         for ks in user_keyspaces:
             for table in self.get_tables(ks):
-                sample = self.get_sample_data(ks, table, limit=50)
-                row_count = len(sample)
+                row_count = self.backend.count_rows(ks, table)
+                if row_count == -1:
+                    count_unavailable = True
+                    continue
                 rows_per_table.append(row_count)
 
                 if row_count > largest_table[1]:
                     largest_table = (f"{ks}.{table}", row_count)
 
         # Average rows per table
-        avg_rows = int(sum(rows_per_table) / len(rows_per_table)) if rows_per_table else 0
-        self.avg_rows_label.configure(text=f"{avg_rows}")
+        if count_unavailable:
+            self.avg_rows_label.configure(text="N/A")
+            self.largest_table_label.configure(text="N/A")
+        else:
+            avg_rows = int(sum(rows_per_table) / len(rows_per_table)) if rows_per_table else 0
+            self.avg_rows_label.configure(text=f"{avg_rows}")
 
-        # Largest table
-        self.largest_table_label.configure(
-            text=f"{largest_table[0]} ({largest_table[1]} rows)"
-        )
+            self.largest_table_label.configure(
+                text=f"{largest_table[0]} ({largest_table[1]} rows)"
+            )
         
         # Count tables in current keyspace
         current_ks = self.keyspace_dropdown.get()
@@ -373,7 +394,7 @@ class CassandraContentViewer(ctk.CTkFrame):
 
         # Sample row count of current table
         current_table = self.table_dropdown.get()
-        rows = self.get_sample_data(current_ks, current_table, limit=20) if current_table else []
+        rows = self.get_sample_data(current_ks, current_table, limit=PREVIEW_LIMIT) if current_table else []
 
         # --- GRAPH 1: Rows per table ---
         self.ax1.clear()
@@ -388,9 +409,11 @@ class CassandraContentViewer(ctk.CTkFrame):
 
             for t in tables:
                 try:
-                    sample = self.get_sample_data(ks, t, limit=20)
+                    row_count = self.backend.count_rows(ks, t)
+                    if row_count == -1:
+                        continue
                     table_names.append(f"{ks}.{t}")
-                    table_row_counts.append(len(sample))
+                    table_row_counts.append(row_count)
                 except Exception:
                     # skip problematic tables
                     continue

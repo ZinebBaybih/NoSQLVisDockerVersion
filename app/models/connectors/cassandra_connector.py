@@ -5,6 +5,8 @@ from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster
 from cassandra.policies import RoundRobinPolicy
 
+from config import PREVIEW_LIMIT
+
 
 class CassandraConnector:
     def __init__(
@@ -77,11 +79,22 @@ class CassandraConnector:
             return []
         return list(ks_meta.tables.keys())
 
-    def fetch_sample(self, keyspace, table, limit=1000):
+    def fetch_sample(self, keyspace, table, limit=PREVIEW_LIMIT):
         rows = self.session.execute(
             f"SELECT * FROM {keyspace}.{table} LIMIT {int(limit)}"
         )
         return [dict(row._asdict()) for row in rows]
+
+    def count_rows(self, keyspace: str, table: str) -> int:
+        try:
+            row = self.session.execute(
+                f"SELECT COUNT(*) FROM {keyspace}.{table}"
+            ).one()
+            if row is None:
+                return 0
+            return int(getattr(row, "count", row[0]))
+        except Exception:
+            return -1
 
     def fetch_all(self, keyspace, table):
         rows = self.session.execute(f"SELECT * FROM {keyspace}.{table}")

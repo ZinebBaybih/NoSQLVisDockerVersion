@@ -92,6 +92,9 @@ class NoSQLBackend:
     def export_keys_to_csv(self, *args, **kwargs):
         return self.client.export_keys_to_csv(*args, **kwargs)
 
+    def switch_db(self, db_index):
+        return self.client.switch_db(db_index)
+
     # -------------------- Cassandra-specific --------------------
     def list_keyspaces(self):
         return self.client.list_keyspaces()
@@ -107,3 +110,6 @@ class NoSQLBackend:
 
     def search_table(self, keyspace, table, column, operator, value):
         return self.client.search_table(keyspace, table, column, operator, value)
+
+    def count_rows(self, keyspace, table):
+        return self.client.count_rows(keyspace, table)

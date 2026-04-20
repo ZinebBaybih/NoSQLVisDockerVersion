@@ -1,6 +1,8 @@
 # app/models/connectors/neo4j_connector.py
 from neo4j import GraphDatabase
 
+from config import PREVIEW_LIMIT
+
 
 class Neo4jConnector:
     def __init__(self, host="localhost", port=7687, user="neo4j", password=None):
@@ -50,7 +52,7 @@ class Neo4jConnector:
             query = f"""
             MATCH (n:`{col_name}`)
             RETURN properties(n) AS props
-            LIMIT 50
+            LIMIT {PREVIEW_LIMIT}
             """
             return [r["props"] for r in session.run(query)]
 
@@ -64,6 +66,6 @@ class Neo4jConnector:
             query = f"""
             MATCH (n:`{label}`)-[r]->(m)
             RETURN n, r, m
-            LIMIT 100
+            LIMIT {PREVIEW_LIMIT}
             """
             return list(session.run(query))

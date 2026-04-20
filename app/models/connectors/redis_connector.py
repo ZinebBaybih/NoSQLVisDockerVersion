@@ -5,6 +5,8 @@ import csv
 from typing import List, Dict, Any, Optional
 from collections import Counter
 
+from config import PREVIEW_LIMIT
+
 
 class RedisConnector:
     """
@@ -12,7 +14,7 @@ class RedisConnector:
     All returned keys/values are Python strings (decode_responses=True).
     """
 
-    def __init__(self, host: str = "localhost", port: int = 6379, password: Optional[str] = None, db: int = 0, sample_limit: int = 10000):
+    def __init__(self, host: str = "localhost", port: int = 6379, password: Optional[str] = None, db: int = 0, sample_limit: int = PREVIEW_LIMIT):
         self.host = host
         self.port = int(port) if port is not None else 6379
         self.password = password
@@ -35,6 +37,19 @@ class RedisConnector:
 
     def disconnect(self):
         self.client = None
+
+    def switch_db(self, db_index: int):
+        self.disconnect()
+        self.db = int(db_index)
+        self.client = redis.Redis(
+            host=self.host,
+            port=self.port,
+            db=self.db,
+            password=self.password,
+            decode_responses=True,
+            socket_timeout=5
+        )
+        self.client.ping()
 
     def list_databases(self) -> List[Dict[str, Any]]:
         """
@@ -71,7 +86,7 @@ class RedisConnector:
         try:
             for k in tmp.scan_iter(match='*', count=100):
                 keys.append({"name": k, "count": 1})
-                if len(keys) >= 10000:
+                if len(keys) >= PREVIEW_LIMIT:
                     break
         except Exception:
             pass
@@ -180,7 +195,7 @@ class RedisConnector:
 
 
 
-    def list_keys(self, pattern: str = "*", limit: int = 10000) -> List[Dict[str, Any]]:
+    def list_keys(self, pattern: str = "*", limit: int = PREVIEW_LIMIT) -> List[Dict[str, Any]]:
         """
         Return list of keys (string), type, ttl, and size in bytes. Decode_responses=True ensures strings.
         """
@@ -216,7 +231,7 @@ class RedisConnector:
         return results
 
 
-    def get_key_value(self, key: str, list_limit: int = 50) -> Dict[str, Any]:
+    def get_key_value(self, key: str, list_limit: int = PREVIEW_LIMIT) -> Dict[str, Any]:
         """
         Return the value and the Redis type for a given key.
         Structure: {"type": "<type>", "value": ...} or {"type":..., "error": ...}
