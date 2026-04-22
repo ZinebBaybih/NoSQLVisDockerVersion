@@ -4,10 +4,12 @@ from tkinter import messagebox, filedialog
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import json
+import time
 from tksheet import Sheet
 from customtkinter import CTkTextbox
 
 from config import PAGE_SIZES, PREVIEW_LIMIT
+from utils.benchmark_logger import is_gui_benchmark_enabled, log_metric
 
 
 class RedisContentViewer(ctk.CTkFrame):
@@ -52,7 +54,26 @@ class RedisContentViewer(ctk.CTkFrame):
         if callback:
             callback()
 
+    def log_gui_metric(self, metric, start, page_size="", page="", records_returned="", total_records="", status="ok", error=""):
+        if not is_gui_benchmark_enabled():
+            return
+        self.update_idletasks()
+        log_metric(
+            database="Redis",
+            layer="gui",
+            metric=metric,
+            page_size=page_size,
+            page=page,
+            records_returned=records_returned,
+            total_records=total_records,
+            duration_ms=(time.perf_counter() - start) * 1000,
+            status=status,
+            error=error,
+        )
+
     def show_database_selector(self):
+        start = time.perf_counter()
+        records_returned = ""
         self.set_loading("Loading Redis databases...")
         try:
             self.clear_view()
@@ -81,6 +102,7 @@ class RedisContentViewer(ctk.CTkFrame):
                 messagebox.showerror("Error", f"Cannot load Redis databases: {e}")
                 databases = []
 
+            records_returned = len(databases)
             if not databases:
                 ctk.CTkLabel(
                     selector_frame,
@@ -97,6 +119,7 @@ class RedisContentViewer(ctk.CTkFrame):
                     height=40
                 ).pack(fill="x", padx=10, pady=8)
         finally:
+            self.log_gui_metric("scope_load", start, records_returned=records_returned)
             self.clear_loading()
 
     def select_database(self, db_index):
@@ -134,6 +157,12 @@ class RedisContentViewer(ctk.CTkFrame):
         top_frame = ctk.CTkFrame(self, fg_color="#F0F0F0")
         top_frame.pack(fill="x", pady=(5, 2))
 
+        ctk.CTkButton(
+            top_frame,
+            text="Change Database",
+            command=self.show_database_selector
+        ).pack(side="left", padx=(10, 6), pady=6)
+
         ctk.CTkLabel(
             top_frame,
             text="Exploring DB {}".format(self.selected_db_index),
@@ -155,16 +184,7 @@ class RedisContentViewer(ctk.CTkFrame):
         self.type_dropdown.pack(side="left", padx=4)
         self.type_dropdown.set("")
 
-        ctk.CTkLabel(top_frame, text="Page size:").pack(side="left", padx=(10, 5))
         self.page_size_var = ctk.StringVar(value=str(PREVIEW_LIMIT))
-        self.page_size_dropdown = ctk.CTkComboBox(
-            top_frame,
-            values=[str(size) for size in PAGE_SIZES],
-            variable=self.page_size_var,
-            width=100,
-            command=self.on_page_size_change
-        )
-        self.page_size_dropdown.pack(side="left", padx=4)
 
         ctk.CTkButton(top_frame, text="Search", command=self.search_keys).pack(side="left", padx=4)
 
@@ -173,10 +193,9 @@ class RedisContentViewer(ctk.CTkFrame):
 
         ctk.CTkButton(action_frame, text="Graphs", command=self.show_graphs_popup).pack(side="left", padx=10, pady=6)
         ctk.CTkButton(action_frame, text="Refresh", command=self.show_metadata).pack(side="left", padx=6, pady=6)
-        ctk.CTkButton(action_frame, text="Change Database", command=self.show_database_selector).pack(side="right", padx=10, pady=6)
 
         self.export_btn = ctk.CTkButton(
-            action_frame, text="Export Selected", command=self.export_selected, state="disabled"
+            action_frame, text="Export", command=self.export_selected, state="disabled"
         )
         self.export_btn.pack(side="right", padx=6, pady=6)
 
@@ -189,16 +208,16 @@ class RedisContentViewer(ctk.CTkFrame):
         self.keys_frame = ctk.CTkFrame(self.keys_value_frame, fg_color="#FFFFFF")
         self.keys_frame.grid(row=0, column=0, sticky="nsew", padx=5)
 
-        self.list_controls_frame = ctk.CTkFrame(self.keys_frame, fg_color="#FFFFFF")
-        self.list_controls_frame.pack(fill="x", pady=(0, 5))
-
         self.preview_label = ctk.CTkLabel(
-            self.list_controls_frame,
+            self.keys_frame,
             text="",
             anchor="w",
             font=("Arial", 12)
         )
-        self.preview_label.pack(side="left", padx=(0, 10))
+        self.preview_label.pack(fill="x", pady=(0, 3))
+
+        self.list_controls_frame = ctk.CTkFrame(self.keys_frame, fg_color="#FFFFFF")
+        self.list_controls_frame.pack(fill="x", pady=(0, 5))
 
         self.pagination_frame = ctk.CTkFrame(self.list_controls_frame, fg_color="#FFFFFF")
         self.prev_btn = ctk.CTkButton(self.pagination_frame, text="Previous", width=100, command=self.go_prev_page)
@@ -207,6 +226,15 @@ class RedisContentViewer(ctk.CTkFrame):
         self.page_indicator_label.pack(side="left", padx=10)
         self.next_btn = ctk.CTkButton(self.pagination_frame, text="Next", width=100, command=self.go_next_page)
         self.next_btn.pack(side="left", padx=5)
+        ctk.CTkLabel(self.pagination_frame, text="Page size:").pack(side="left", padx=(16, 5))
+        self.page_size_dropdown = ctk.CTkComboBox(
+            self.pagination_frame,
+            values=[str(size) for size in PAGE_SIZES],
+            variable=self.page_size_var,
+            width=100,
+            command=self.on_page_size_change
+        )
+        self.page_size_dropdown.pack(side="left", padx=4)
         self.pagination_frame.pack(side="right")
 
         self.keys_sheet = Sheet(self.keys_frame, headers=["Key", "Type", "TTL", "Size"])
@@ -234,15 +262,23 @@ class RedisContentViewer(ctk.CTkFrame):
         self.show_metadata()
 
     def show_metadata(self):
+        start = time.perf_counter()
         self.set_loading("Loading Redis metadata...")
         try:
             self.current_meta = self.backend.get_metadata()
             self.update_stats(self.current_meta)
             self.search_keys(show_loader=False)
         finally:
+            self.log_gui_metric(
+                "metadata_load",
+                start,
+                records_returned=self.current_meta.get("sampled_keys", "") if self.current_meta else "",
+                total_records=self.current_meta.get("total_keys", "") if self.current_meta else "",
+            )
             self.clear_loading()
 
     def search_keys(self, show_loader=True):
+        start = time.perf_counter()
         if show_loader:
             self.set_loading("Loading Redis keys...")
         try:
@@ -253,6 +289,14 @@ class RedisContentViewer(ctk.CTkFrame):
             self.load_keys_cache(pattern, selected_type)
             self.render_keys_page()
         finally:
+            self.log_gui_metric(
+                "filter_search" if show_loader else "first_page",
+                start,
+                page_size=self.current_page_size,
+                page=self.current_page,
+                records_returned=min(self.current_page_size, len(self.keys_cache)),
+                total_records=self.total_records,
+            )
             if show_loader:
                 self.clear_loading()
 
@@ -306,10 +350,19 @@ class RedisContentViewer(ctk.CTkFrame):
         self.pagination_frame.pack(side="right")
 
     def on_page_size_change(self, _value):
+        start = time.perf_counter()
         self.current_page_size = int(self.page_size_var.get())
         self.current_page = 1
         if self.selected_db_index is not None:
             self.render_keys_page()
+            self.log_gui_metric(
+                "page_size_change",
+                start,
+                page_size=self.current_page_size,
+                page=self.current_page,
+                records_returned=min(self.current_page_size, len(self.keys_cache)),
+                total_records=self.total_records,
+            )
 
     def go_prev_page(self):
         if self.current_page > 1:
@@ -317,10 +370,20 @@ class RedisContentViewer(ctk.CTkFrame):
             self.render_keys_page()
 
     def go_next_page(self):
+        start = time.perf_counter()
         total_pages = max(1, (self.total_records + self.current_page_size - 1) // self.current_page_size)
         if self.current_page < total_pages:
             self.current_page += 1
             self.render_keys_page()
+            offset = (self.current_page - 1) * self.current_page_size
+            self.log_gui_metric(
+                "next_page",
+                start,
+                page_size=self.current_page_size,
+                page=self.current_page,
+                records_returned=min(self.current_page_size, max(0, len(self.keys_cache) - offset)),
+                total_records=self.total_records,
+            )
 
     def on_row_click(self, event=None):
         cell = self.keys_sheet.get_currently_selected()
@@ -352,9 +415,10 @@ class RedisContentViewer(ctk.CTkFrame):
                 self.keys_sheet.highlight_cells(row=row, column=1, bg=color, fg="white")
 
     def export_selected(self):
-        rows = self.keys_sheet.get_selected_rows()
-        keys = [self.keys_sheet.get_cell_data(r, 0) for r in rows]
+        data = self.keys_sheet.get_sheet_data()
+        keys = [row[0] for row in data if row]
         if not keys:
+            messagebox.showinfo("Export", "No keys visible to export.")
             return
 
         path = filedialog.asksaveasfilename(defaultextension=".csv")
@@ -369,6 +433,7 @@ class RedisContentViewer(ctk.CTkFrame):
         self.summary_value_labels["Persistent"].configure(text=str(meta.get("persistent_keys")))
 
     def show_graphs_popup(self):
+        start = time.perf_counter()
         if not self.current_meta:
             return
 
@@ -412,3 +477,9 @@ class RedisContentViewer(ctk.CTkFrame):
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
         ctk.CTkButton(popup, text="Close", command=popup.destroy).pack(pady=(0, 10))
         plt.close(fig)
+        self.log_gui_metric(
+            "graph_prepare",
+            start,
+            records_returned=self.current_meta.get("sampled_keys", ""),
+            total_records=self.current_meta.get("total_keys", ""),
+        )

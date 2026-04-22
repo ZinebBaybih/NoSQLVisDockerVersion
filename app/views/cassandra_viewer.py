@@ -7,8 +7,16 @@ import matplotlib.pyplot as plt
 # from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import csv
+import time
 
 from config import PAGE_SIZES, PREVIEW_LIMIT
+from utils.benchmark_logger import is_gui_benchmark_enabled, log_metric
+
+SYSTEM_KEYSPACE_PREFIX = "system"
+
+
+def is_user_keyspace(keyspace):
+    return keyspace and not keyspace.startswith(SYSTEM_KEYSPACE_PREFIX)
 
 
 class CassandraContentViewer(ctk.CTkFrame):
@@ -22,46 +30,40 @@ class CassandraContentViewer(ctk.CTkFrame):
         self.total_records = 0
         self.current_keyspace = None
         self.current_table = None
+        self.rows_cache = []
+        self.cache_limit = max(PAGE_SIZES) * 20
+        self.cache_note = ""
         self.graph1_data = ([], [])
         self.graph2_data = ([], [])
 
         self.configure(fg_color="#FFFFFF")
         self.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Excluded Keyspaces
-        system_keyspaces = {
-            "system", "system_schema", "system_auth",
-            "system_traces", "system_distributed",
-            "system_virtual_schema"
-        }
-
-        # User keyspaces
-        all_keyspaces = self.get_keyspaces()
-        user_keyspaces = [ks for ks in all_keyspaces if ks not in system_keyspaces]
+        user_keyspaces = self.get_keyspaces()
                 
 
         # --- GLOBAL STATS BANNER ---
         self.stats_banner = ctk.CTkFrame(self, fg_color="#FFFFFF")
         self.stats_banner.pack(fill="x", padx=10, pady=10)
 
-        # CARD 1 - System Keyspaces
+        # CARD 1 - Application Keyspaces
         card1 = ctk.CTkFrame(self.stats_banner, fg_color="#2C2C2C", corner_radius=10)  # light blue
         card1.pack(side="left", expand=True, fill="both", padx=8)
-        ctk.CTkLabel(card1, text="System Keyspaces", font=("Arial", 12), text_color="white").pack(pady=(5, 0))
-        self.system_ks_label = ctk.CTkLabel(card1, text="0", font=("Arial", 18, "bold"), text_color="white")
-        self.system_ks_label.pack(pady=(0, 10))
+        ctk.CTkLabel(card1, text="Keyspaces", font=("Arial", 12), text_color="white").pack(pady=(5, 0))
+        self.keyspaces_label = ctk.CTkLabel(card1, text="0", font=("Arial", 18, "bold"), text_color="white")
+        self.keyspaces_label.pack(pady=(0, 10))
 
-        # CARD 2 - User Keyspaces
+        # CARD 2 - Tables in Selected Keyspace
         card2 = ctk.CTkFrame(self.stats_banner, fg_color="#18357E", corner_radius=10)  # light green
         card2.pack(side="left", expand=True, fill="both", padx=8)
-        ctk.CTkLabel(card2, text="User Keyspaces", font=("Arial", 12), text_color="white").pack(pady=(5, 0))
-        self.user_ks_label = ctk.CTkLabel(card2, text="0", font=("Arial", 18, "bold"), text_color="white")
-        self.user_ks_label.pack(pady=(0, 10))
+        ctk.CTkLabel(card2, text="Selected Tables", font=("Arial", 12), text_color="white").pack(pady=(5, 0))
+        self.selected_tables_label = ctk.CTkLabel(card2, text="0", font=("Arial", 18, "bold"), text_color="white")
+        self.selected_tables_label.pack(pady=(0, 10))
 
-        # CARD 3 - Total User Tables
+        # CARD 3 - Total Application Tables
         card3 = ctk.CTkFrame(self.stats_banner, fg_color="#4EAFFA", corner_radius=10)  # light orange
         card3.pack(side="left", expand=True, fill="both", padx=8)
-        ctk.CTkLabel(card3, text="User Tables", font=("Arial", 12), text_color="white").pack(pady=(5, 0))
+        ctk.CTkLabel(card3, text="Tables", font=("Arial", 12), text_color="white").pack(pady=(5, 0))
         self.user_tables_label = ctk.CTkLabel(card3, text="0", font=("Arial", 18, "bold"), text_color="white")
         self.user_tables_label.pack(pady=(0, 10))
 
@@ -133,16 +135,7 @@ class CassandraContentViewer(ctk.CTkFrame):
         )
         self.table_dropdown.pack(side="left", padx=5)
 
-        ctk.CTkLabel(self.controls_frame, text="Page size:").pack(side="left", padx=(10, 5))
         self.page_size_var = ctk.StringVar(value=str(PREVIEW_LIMIT))
-        self.page_size_dropdown = ctk.CTkComboBox(
-            self.controls_frame,
-            values=[str(size) for size in PAGE_SIZES],
-            variable=self.page_size_var,
-            width=100,
-            command=self.on_page_size_change
-        )
-        self.page_size_dropdown.pack(side="left", padx=5)
 
         self.refresh_btn = ctk.CTkButton(
             self.controls_frame, text="Refresh Keyspaces", command=self.refresh_keyspaces
@@ -244,6 +237,15 @@ class CassandraContentViewer(ctk.CTkFrame):
         self.page_indicator_label.pack(side="left", padx=10)
         self.next_btn = ctk.CTkButton(self.pagination_frame, text="Next", width=100, command=self.go_next_page)
         self.next_btn.pack(side="left", padx=5)
+        ctk.CTkLabel(self.pagination_frame, text="Page size:").pack(side="left", padx=(16, 5))
+        self.page_size_dropdown = ctk.CTkComboBox(
+            self.pagination_frame,
+            values=[str(size) for size in PAGE_SIZES],
+            variable=self.page_size_var,
+            width=100,
+            command=self.on_page_size_change
+        )
+        self.page_size_dropdown.pack(side="left", padx=5)
         self.pagination_frame.pack(side="right")
 
 
@@ -271,17 +273,40 @@ class CassandraContentViewer(ctk.CTkFrame):
         if callback:
             callback()
 
+    def log_gui_metric(self, metric, start, page_size="", page="", records_returned="", total_records="", status="ok", error=""):
+        if not is_gui_benchmark_enabled():
+            return
+        self.update_idletasks()
+        log_metric(
+            database="Cassandra",
+            layer="gui",
+            metric=metric,
+            page_size=page_size,
+            page=page,
+            records_returned=records_returned,
+            total_records=total_records,
+            duration_ms=(time.perf_counter() - start) * 1000,
+            status=status,
+            error=error,
+        )
+
     # -----------------------------
     # Backend helpers
     # -----------------------------
     def get_keyspaces(self):
         try:
-            return self.backend.list_keyspaces()
+            return [
+                keyspace
+                for keyspace in self.backend.list_keyspaces()
+                if is_user_keyspace(keyspace)
+            ]
         except Exception as e:
             messagebox.showerror("Error", f"Cannot fetch keyspaces: {e}")
             return []
 
     def get_tables(self, keyspace):
+        if not is_user_keyspace(keyspace):
+            return []
         try:
             return self.backend.list_tables(keyspace)
         except Exception as e:
@@ -299,23 +324,29 @@ class CassandraContentViewer(ctk.CTkFrame):
     # UI Callbacks
     # -----------------------------
     def on_keyspace_change(self, value, show_loader=True):
+        start = time.perf_counter()
+        records_returned = ""
         if show_loader:
             self.set_loading("Loading Cassandra keyspace...")
         try:
             self.export_btn.configure(state="disabled")
             tables = self.get_tables(value)
+            records_returned = len(tables)
             self.table_dropdown.configure(values=tables)
+            self.selected_tables_label.configure(text=str(len(tables)))
             if tables:
                 self.table_dropdown.set(tables[0])
                 self.on_table_change(tables[0], show_loader=False)
             else:
                 self.update_dashboard()
         finally:
+            self.log_gui_metric("scope_load", start, records_returned=records_returned)
             if show_loader:
                 self.clear_loading()
 
 
     def on_table_change(self, value, show_loader=True):
+        start = time.perf_counter()
         if show_loader:
             self.set_loading("Loading Cassandra table...")
         try:
@@ -323,14 +354,23 @@ class CassandraContentViewer(ctk.CTkFrame):
             self.current_keyspace = keyspace
             self.current_table = value
             self.total_records = self.backend.count_rows(keyspace, value)
+            self.load_rows_cache()
             self.current_page = 1
             self.current_page_size = int(self.page_size_var.get())
             self.render_table_page(show_loader=False)
         finally:
+            self.log_gui_metric(
+                "metadata_load",
+                start,
+                records_returned=1 if value else 0,
+                total_records=self.total_records,
+            )
             if show_loader:
                 self.clear_loading()
 
     def render_table_page(self, show_loader=True):
+        start = time.perf_counter()
+        rows = []
         if show_loader:
             self.set_loading("Loading Cassandra rows...")
         if not self.current_keyspace or not self.current_table:
@@ -342,13 +382,9 @@ class CassandraContentViewer(ctk.CTkFrame):
         try:
             offset = (self.current_page - 1) * self.current_page_size
 
-            # Cassandra CQL has no native OFFSET, so we fetch enough rows and slice locally.
-            data = self.get_sample_data(
-                self.current_keyspace,
-                self.current_table,
-                limit=offset + self.current_page_size
-            )
-            data = data[offset: offset + self.current_page_size]
+            # Cassandra CQL has no native OFFSET. We cache a bounded preview once,
+            # then paginate locally so page navigation stays responsive.
+            data = self.rows_cache[offset: offset + self.current_page_size]
 
             if not data:
                 self.sheet.set_sheet_data([])
@@ -368,29 +404,63 @@ class CassandraContentViewer(ctk.CTkFrame):
             start = offset + 1 if self.total_records > 0 else 0
             end = min(offset + len(rows), self.total_records) if self.total_records > 0 else len(rows)
             self.preview_label.configure(
-                text="Showing {}-{} of {} rows".format(start, end, self.total_records)
+                text="Showing {}-{} of {} rows{}".format(
+                    start,
+                    end,
+                    min(self.total_records, len(self.rows_cache)) if self.total_records > 0 else len(self.rows_cache),
+                    self.cache_note,
+                )
             )
             self.update_pagination_controls()
         finally:
+            self.log_gui_metric(
+                "first_page" if self.current_page == 1 else "next_page",
+                start,
+                page_size=self.current_page_size,
+                page=self.current_page,
+                records_returned=len(rows),
+                total_records=self.total_records,
+            )
             if show_loader:
                 self.clear_loading()
 
     def update_pagination_controls(self):
-        if not self.current_table or self.total_records <= 0:
+        if not self.current_table or not self.rows_cache:
             self.pagination_frame.pack_forget()
             return
 
-        total_pages = max(1, (self.total_records + self.current_page_size - 1) // self.current_page_size)
+        total_pages = max(1, (len(self.rows_cache) + self.current_page_size - 1) // self.current_page_size)
         self.page_indicator_label.configure(text="Page {} of {}".format(self.current_page, total_pages))
         self.prev_btn.configure(state="disabled" if self.current_page <= 1 else "normal")
         self.next_btn.configure(state="disabled" if self.current_page >= total_pages else "normal")
         self.pagination_frame.pack(side="right")
 
+    def load_rows_cache(self):
+        self.rows_cache = self.get_sample_data(
+            self.current_keyspace,
+            self.current_table,
+            limit=self.cache_limit
+        )
+        self.cache_note = ""
+        if self.total_records > len(self.rows_cache):
+            self.cache_note = " (cached first {} of {} total rows)".format(
+                len(self.rows_cache),
+                self.total_records
+            )
+
     def on_page_size_change(self, _value):
+        start = time.perf_counter()
         self.current_page_size = int(self.page_size_var.get())
         if self.current_table:
             self.current_page = 1
             self.render_table_page()
+            self.log_gui_metric(
+                "page_size_change",
+                start,
+                page_size=self.current_page_size,
+                page=self.current_page,
+                total_records=self.total_records,
+            )
 
     def go_prev_page(self):
         if self.current_page > 1:
@@ -398,7 +468,7 @@ class CassandraContentViewer(ctk.CTkFrame):
             self.render_table_page()
 
     def go_next_page(self):
-        total_pages = max(1, (self.total_records + self.current_page_size - 1) // self.current_page_size)
+        total_pages = max(1, (len(self.rows_cache) + self.current_page_size - 1) // self.current_page_size)
         if self.current_page < total_pages:
             self.current_page += 1
             self.render_table_page()
@@ -408,20 +478,27 @@ class CassandraContentViewer(ctk.CTkFrame):
         self.set_loading("Refreshing Cassandra keyspaces...")
         try:
             self.export_btn.configure(state="disabled")
-            # Excluded Keyspaces
-            system_keyspaces = {
-                "system", "system_schema", "system_auth",
-                "system_traces", "system_distributed",
-                "system_virtual_schema"
-            }
-            # User keyspaces
-            all_keyspaces = self.get_keyspaces()
-            user_keyspaces = [ks for ks in all_keyspaces if ks not in system_keyspaces]
+            user_keyspaces = self.get_keyspaces()
             
             self.keyspace_dropdown.configure(values=user_keyspaces)
-            if user_keyspaces:
+            current_keyspace = self.keyspace_var.get()
+            if current_keyspace in user_keyspaces:
+                self.keyspace_dropdown.set(current_keyspace)
+                tables = self.get_tables(current_keyspace)
+                self.table_dropdown.configure(values=tables)
+            elif user_keyspaces:
                 self.keyspace_dropdown.set(user_keyspaces[0])
-                self.on_keyspace_change(user_keyspaces[0], show_loader=False)
+                tables = self.get_tables(user_keyspaces[0])
+                self.table_dropdown.configure(values=tables)
+                if tables:
+                    self.table_dropdown.set(tables[0])
+                self.current_keyspace = None
+                self.current_table = None
+                self.rows_cache = []
+                self.sheet.set_sheet_data([])
+                self.preview_label.configure(text="Select a table to load preview rows")
+                self.pagination_frame.pack_forget()
+            self.update_dashboard()
         finally:
             self.clear_loading()
 
@@ -436,11 +513,52 @@ class CassandraContentViewer(ctk.CTkFrame):
             messagebox.showinfo("Info", "Please select table, column, operator, and enter value")
             return
 
-        results = self.backend.search_table(keyspace, table, column, operator, value)
+        headers = list(self.sheet.headers())
+        if column not in headers:
+            messagebox.showinfo("Info", "Please select a visible column")
+            return
+
+        rows = self.sheet.get_sheet_data()
+        col_index = headers.index(column)
+
+        def normalize(v):
+            if v is None:
+                return ("none", None)
+            s = str(v).strip().lower()
+            try:
+                return ("number", float(s))
+            except Exception:
+                return ("string", s)
+
+        input_type, input_val = normalize(value)
+
+        def compare(row_val):
+            row_type, row_norm = normalize(row_val)
+            if row_type != input_type:
+                return False
+            if operator == "=":
+                return row_norm == input_val
+            if operator == "!=":
+                return row_norm != input_val
+            if operator == ">":
+                return row_norm > input_val
+            if operator == "<":
+                return row_norm < input_val
+            if operator == ">=":
+                return row_norm >= input_val
+            if operator == "<=":
+                return row_norm <= input_val
+            return False
+
+        results = [
+            dict(zip(headers, row)) for row in rows
+            if col_index < len(row) and compare(row[col_index])
+        ]
 
         if not results:
             self.sheet.set_sheet_data([])
             self.export_btn.configure(state="disabled")
+            self.preview_label.configure(text="Filter current preview: 0 matching rows")
             return
 
     # Convert list of dicts → headers + rows
@@ -449,26 +567,22 @@ class CassandraContentViewer(ctk.CTkFrame):
 
         self.sheet.headers(headers)
         self.sheet.set_sheet_data(rows)
+        self.preview_label.configure(
+            text="Filter current preview: {} matching rows".format(len(rows))
+        )
 
         self.export_btn.configure(state="normal")
 
     # DASHBOARD UPDATE
 
     def update_dashboard(self):
-        system_keyspaces = {
-            "system", "system_schema", "system_auth",
-            "system_traces", "system_distributed",
-            "system_virtual_schema"
-        }
-
-        # Separate keyspaces
-        all_keyspaces = self.get_keyspaces()
-        user_keyspaces = [ks for ks in all_keyspaces if ks not in system_keyspaces]
-        system_keyspaces_real = [ks for ks in all_keyspaces if ks in system_keyspaces]
+        user_keyspaces = self.get_keyspaces()
 
         # Counts
-        self.system_ks_label.configure(text=f"{len(system_keyspaces_real)}")
-        self.user_ks_label.configure(text=f"{len(user_keyspaces)}")
+        self.keyspaces_label.configure(text=f"{len(user_keyspaces)}")
+        current_ks = self.keyspace_dropdown.get()
+        current_tables = self.get_tables(current_ks) if current_ks else []
+        self.selected_tables_label.configure(text=f"{len(current_tables)}")
 
         # Count user tables
         total_user_tables = sum(len(self.get_tables(ks)) for ks in user_keyspaces)
@@ -502,10 +616,6 @@ class CassandraContentViewer(ctk.CTkFrame):
                 text=f"{largest_table[0]} ({largest_table[1]} rows)"
             )
         
-        # Count tables in current keyspace
-        current_ks = self.keyspace_dropdown.get()
-        tables = self.get_tables(current_ks)
-
         # Sample row count of current table
         current_table = self.table_dropdown.get()
         rows = self.get_sample_data(current_ks, current_table, limit=PREVIEW_LIMIT) if current_table else []
@@ -515,8 +625,6 @@ class CassandraContentViewer(ctk.CTkFrame):
         table_row_counts = []
 
         for ks in user_keyspaces:
-            if ks.startswith("system"):
-                continue  # ignore system keyspaces
             tables = self.get_tables(ks)
 
             for t in tables:
@@ -545,6 +653,7 @@ class CassandraContentViewer(ctk.CTkFrame):
         self.graph2_data = (ks_names, ks_table_counts)
 
     def show_graphs_popup(self):
+        start = time.perf_counter()
         popup = ctk.CTkToplevel(self)
         popup.title("Cassandra Graphs")
         popup.geometry("980x520")
@@ -579,6 +688,12 @@ class CassandraContentViewer(ctk.CTkFrame):
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
         ctk.CTkButton(popup, text="Close", command=popup.destroy).pack(pady=(0, 10))
         plt.close(fig)
+        self.log_gui_metric(
+            "graph_prepare",
+            start,
+            records_returned=len(table_names),
+            total_records=sum(table_row_counts) if table_row_counts else "",
+        )
 
 
     def export_selected(self):
@@ -588,18 +703,13 @@ class CassandraContentViewer(ctk.CTkFrame):
         if not keyspace or not table:
             return
 
-        # Get selected rows (indexes)
-        selected_rows = self.sheet.get_selected_rows()
-
         # Get headers from the sheet
         headers = self.sheet.headers()  # always get headers from sheet
 
-        # CASE 1: Export selected rows
-        if selected_rows:
-            data = [self.sheet.get_row_data(r) for r in selected_rows]
-        else:
-            # CASE 2: Export full sheet
-            data = self.sheet.get_sheet_data()  # all rows in the sheet
+        data = self.sheet.get_sheet_data()  # current visible page/filter result
+        if not data:
+            messagebox.showinfo("Export", "No visible rows to export.")
+            return
 
         # Ask filename
         file_path = filedialog.asksaveasfilename(

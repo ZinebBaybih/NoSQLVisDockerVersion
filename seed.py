@@ -6,13 +6,26 @@ Requirements: docker-compose must be running (docker-compose up -d)
 
 import argparse
 import random
+import sys
 import time
 import uuid
 import warnings
 import traceback
 from datetime import datetime, timedelta
+from pathlib import Path
 
 warnings.filterwarnings("ignore")
+
+APP_DIR = Path(__file__).resolve().parent / "app"
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
+
+from config import (
+    CASSANDRA_RESET_KEYSPACES,
+    MONGODB_RESET_DATABASES,
+    NEO4J_RESET_LABELS,
+    REDIS_RESET_DATABASES,
+)
 
 # ==============================================================
 # SYNTHETIC DATA GENERATORS
@@ -123,6 +136,115 @@ def _run_neo4j_batch(session, query, rows):
     result = session.run(query, rows=rows)
     result.consume()
 
+
+def _clear_neo4j_benchmark_data(session):
+    print("   Clearing existing Neo4j benchmark data...")
+    batch_size = 5000
+
+    for label in ("User", "Product"):
+        deleted_total = 0
+        while True:
+            deleted = session.run(
+                """
+MATCH (n:`%s`)
+WITH n LIMIT $limit
+DETACH DELETE n
+RETURN count(*) AS deleted
+""" % label,
+                limit=batch_size,
+            ).single()["deleted"]
+            deleted_total += deleted
+            if deleted == 0:
+                break
+
+        if deleted_total:
+            print("   -> removed {:,} {} nodes".format(deleted_total, label))
+
+
+def reset_mongodb():
+    from pymongo import MongoClient
+
+    client = MongoClient("mongodb://localhost:27017")
+    for db_name in MONGODB_RESET_DATABASES:
+        client.drop_database(db_name)
+    client.close()
+
+
+def reset_redis():
+    import redis
+
+    for db_index in REDIS_RESET_DATABASES:
+        r = redis.Redis(host="localhost", port=6379, db=db_index, decode_responses=True)
+        r.flushdb()
+
+
+def reset_cassandra():
+    from cassandra.cluster import Cluster
+
+    cluster = None
+    session = None
+    last_error = None
+    for _ in range(12):
+        try:
+            cluster = Cluster(["localhost"], port=9042)
+            session = cluster.connect()
+            session.execute("SELECT release_version FROM system.local")
+            break
+        except Exception as e:
+            last_error = e
+            if session:
+                try:
+                    session.shutdown()
+                except Exception:
+                    pass
+                session = None
+            if cluster:
+                try:
+                    cluster.shutdown()
+                except Exception:
+                    pass
+                cluster = None
+            time.sleep(5)
+    else:
+        raise RuntimeError("Could not reset Cassandra after 60s: {}".format(last_error))
+
+    for keyspace in CASSANDRA_RESET_KEYSPACES:
+        session.execute("DROP KEYSPACE IF EXISTS {}".format(keyspace))
+    session.shutdown()
+    cluster.shutdown()
+
+
+def reset_neo4j():
+    from neo4j import GraphDatabase
+
+    driver = None
+    last_error = None
+    for _ in range(12):
+        try:
+            driver = GraphDatabase.driver(
+                "bolt://localhost:7687",
+                auth=("neo4j", "password")
+            )
+            with driver.session() as s:
+                s.run("RETURN 1")
+            break
+        except Exception as e:
+            last_error = e
+            if driver:
+                try:
+                    driver.close()
+                except Exception:
+                    pass
+                driver = None
+            time.sleep(5)
+    else:
+        raise RuntimeError("Could not reset Neo4j after 60s: {}".format(last_error))
+
+    with driver.session() as s:
+        for label in NEO4J_RESET_LABELS:
+            s.run("MATCH (n:`{}`) DETACH DELETE n".format(label)).consume()
+    driver.close()
+
 # ─────────────────────────────────────────────
 # SAMPLE DATA
 # ─────────────────────────────────────────────
@@ -157,6 +279,64 @@ LOANS = [
     {"loan_id": "L006", "member_id": "M004", "book_title": "Brave New World", "date": "2024-04-15", "returned": False},
 ]
 
+DEMO_RECORD_COUNT = 240
+
+DEPARTMENTS = [
+    {"id": "D01", "name": "Computer Science", "building": "Ada"},
+    {"id": "D02", "name": "Data Science", "building": "Turing"},
+    {"id": "D03", "name": "Information Systems", "building": "Lovelace"},
+]
+
+BRANCHES = [
+    {"id": "B01", "name": "Master in Data Engineering", "department_id": "D02"},
+    {"id": "B02", "name": "Software Engineering", "department_id": "D01"},
+    {"id": "B03", "name": "Information Systems", "department_id": "D03"},
+    {"id": "B04", "name": "Data Analytics", "department_id": "D02"},
+]
+
+COURSES = [
+    {"id": "C101", "title": "Introduction to Databases", "level": "beginner", "department_id": "D01", "credits": 4},
+    {"id": "C102", "title": "Document Databases", "level": "beginner", "department_id": "D02", "credits": 3},
+    {"id": "C201", "title": "Key Value Stores", "level": "intermediate", "department_id": "D03", "credits": 3},
+    {"id": "C202", "title": "Column Family Modeling", "level": "intermediate", "department_id": "D02", "credits": 4},
+    {"id": "C301", "title": "Graph Data Modeling", "level": "advanced", "department_id": "D01", "credits": 4},
+    {"id": "C302", "title": "NoSQL Visualization Lab", "level": "advanced", "department_id": "D03", "credits": 2},
+]
+
+INSTRUCTORS = [
+    {"id": "I01", "name": "Nadia Karim", "department_id": "D01"},
+    {"id": "I02", "name": "Omar Haddad", "department_id": "D02"},
+    {"id": "I03", "name": "Leila Mansouri", "department_id": "D03"},
+]
+
+
+def make_student(i):
+    first_name = FIRST_NAMES[i % len(FIRST_NAMES)]
+    last_name = LAST_NAMES[(i * 3) % len(LAST_NAMES)]
+    branch = BRANCHES[i % len(BRANCHES)]
+    return {
+        "student_id": "S{:04d}".format(i),
+        "name": "{} {}".format(first_name, last_name),
+        "email": "student{:04d}@university.example".format(i),
+        "program": branch["name"],
+        "branch_id": branch["id"],
+        "year": random.randint(1, 5),
+        "country": random.choice(COUNTRIES),
+        "gpa": round(random.uniform(2.0, 4.0), 2),
+    }
+
+
+def make_enrollment(i, student_id=None):
+    course = COURSES[i % len(COURSES)]
+    return {
+        "enrollment_id": "E{:05d}".format(i),
+        "student_id": student_id or "S{:04d}".format(i % DEMO_RECORD_COUNT),
+        "course_id": course["id"],
+        "semester": random.choice(["2024-Fall", "2025-Spring", "2025-Fall", "2026-Spring"]),
+        "status": random.choice(["active", "completed", "withdrawn"]),
+        "grade": random.choice(["A", "B", "C", "In progress"]),
+    }
+
 
 # ==============================================================
 # 1. MONGODB
@@ -178,6 +358,27 @@ def seed_mongodb():
     print("   OK books   : {} documents".format(db.books.count_documents({})))
     print("   OK members : {} documents".format(db.members.count_documents({})))
     print("   OK loans   : {} documents".format(db.loans.count_documents({})))
+
+    edu = client["education_demo"]
+    edu.students.drop()
+    edu.courses.drop()
+    edu.enrollments.drop()
+    edu.branches.drop()
+
+    students = [make_student(i) for i in range(DEMO_RECORD_COUNT)]
+    enrollments = [
+        make_enrollment(i, student_id=students[i % len(students)]["student_id"])
+        for i in range(DEMO_RECORD_COUNT * 2)
+    ]
+    edu.students.insert_many(students)
+    edu.courses.insert_many(COURSES)
+    edu.branches.insert_many(BRANCHES)
+    edu.enrollments.insert_many(enrollments)
+
+    print("   OK education_demo.students    : {} documents".format(edu.students.count_documents({})))
+    print("   OK education_demo.courses     : {} documents".format(edu.courses.count_documents({})))
+    print("   OK education_demo.branches    : {} documents".format(edu.branches.count_documents({})))
+    print("   OK education_demo.enrollments : {} documents".format(edu.enrollments.count_documents({})))
     client.close()
 
 
@@ -215,6 +416,61 @@ def seed_redis():
             l["date"], l["member_id"], l["book_title"], status))
 
     print("   OK {} keys inserted".format(r.dbsize()))
+
+    edu = redis.Redis(host="localhost", port=6379, db=2, decode_responses=True)
+    edu.flushdb()
+    pipe = edu.pipeline()
+    students = [make_student(i) for i in range(DEMO_RECORD_COUNT)]
+
+    pipe.set("campus:name", "NoSQL Vis University")
+    pipe.set("campus:semester", "2026-Spring")
+    pipe.set("campus:student_count", str(len(students)))
+
+    for department in DEPARTMENTS:
+        pipe.hset("department:{}".format(department["id"]), mapping=department)
+        pipe.sadd("departments", department["id"])
+
+    for branch in BRANCHES:
+        pipe.hset("branch:{}".format(branch["id"]), mapping=branch)
+        pipe.sadd("branches:{}".format(branch["department_id"]), branch["id"])
+
+    for course in COURSES:
+        pipe.hset("course:{}".format(course["id"]), mapping={
+            "id": course["id"],
+            "title": course["title"],
+            "level": course["level"],
+            "department_id": course["department_id"],
+            "credits": str(course["credits"]),
+        })
+        pipe.sadd("courses:{}".format(course["level"]), course["id"])
+
+    for i, student in enumerate(students):
+        pipe.hset("student:{}".format(student["student_id"]), mapping={
+            "student_id": student["student_id"],
+            "name": student["name"],
+            "email": student["email"],
+            "program": student["program"],
+            "branch_id": student["branch_id"],
+            "year": str(student["year"]),
+            "country": student["country"],
+            "gpa": str(student["gpa"]),
+        })
+        pipe.zadd("students:by_gpa", {student["student_id"]: student["gpa"]})
+        pipe.sadd("students:program:{}".format(student["program"].replace(" ", "_")), student["student_id"])
+        pipe.rpush("activity:recent", "{} enrolled in {}".format(
+            student["student_id"], COURSES[i % len(COURSES)]["id"]
+        ))
+        pipe.xadd("stream:enrollments", {
+            "student_id": student["student_id"],
+            "course_id": COURSES[i % len(COURSES)]["id"],
+            "status": "active",
+        }, maxlen=500, approximate=True)
+
+        if (i + 1) % 100 == 0:
+            pipe.execute()
+
+    pipe.execute()
+    print("   OK Redis DB 2 education mixed keys : {}".format(edu.dbsize()))
 
 
 # ==============================================================
@@ -320,12 +576,100 @@ CREATE TABLE loans (
             (l["loan_id"], l["member_id"], l["book_title"], l["date"], l["returned"])
         )
 
+    session.execute("""
+CREATE KEYSPACE IF NOT EXISTS education_demo
+WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}
+""")
+    session.set_keyspace("education_demo")
+
+    session.execute("DROP TABLE IF EXISTS enrollments")
+    session.execute("DROP TABLE IF EXISTS courses")
+    session.execute("DROP TABLE IF EXISTS students")
+    session.execute("DROP TABLE IF EXISTS branches")
+
+    session.execute("""
+CREATE TABLE students (
+    student_id TEXT PRIMARY KEY,
+    name TEXT,
+    email TEXT,
+    program TEXT,
+    branch_id TEXT,
+    year INT,
+    country TEXT,
+    gpa FLOAT
+)
+""")
+    session.execute("""
+CREATE TABLE branches (
+    branch_id TEXT PRIMARY KEY,
+    name TEXT,
+    department_id TEXT
+)
+""")
+    session.execute("""
+CREATE TABLE courses (
+    course_id TEXT PRIMARY KEY,
+    title TEXT,
+    level TEXT,
+    department_id TEXT,
+    credits INT
+)
+""")
+    session.execute("""
+CREATE TABLE enrollments (
+    enrollment_id TEXT PRIMARY KEY,
+    student_id TEXT,
+    course_id TEXT,
+    semester TEXT,
+    status TEXT,
+    grade TEXT
+)
+""")
+
+    students_stmt = session.prepare(
+        "INSERT INTO students (student_id, name, email, program, branch_id, year, country, gpa) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    branches_stmt = session.prepare(
+        "INSERT INTO branches (branch_id, name, department_id) VALUES (?, ?, ?)"
+    )
+    courses_stmt = session.prepare(
+        "INSERT INTO courses (course_id, title, level, department_id, credits) VALUES (?, ?, ?, ?, ?)"
+    )
+    enrollments_stmt = session.prepare(
+        "INSERT INTO enrollments (enrollment_id, student_id, course_id, semester, status, grade) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+
+    students = [make_student(i) for i in range(DEMO_RECORD_COUNT)]
+    for student in students:
+        session.execute(students_stmt, (
+            student["student_id"], student["name"], student["email"], student["program"],
+            student["branch_id"], student["year"], student["country"], student["gpa"]
+        ))
+    for branch in BRANCHES:
+        session.execute(branches_stmt, (
+            branch["id"], branch["name"], branch["department_id"]
+        ))
+    for course in COURSES:
+        session.execute(courses_stmt, (
+            course["id"], course["title"], course["level"], course["department_id"], course["credits"]
+        ))
+    for i in range(DEMO_RECORD_COUNT * 2):
+        enrollment = make_enrollment(i, student_id=students[i % len(students)]["student_id"])
+        session.execute(enrollments_stmt, (
+            enrollment["enrollment_id"], enrollment["student_id"], enrollment["course_id"],
+            enrollment["semester"], enrollment["status"], enrollment["grade"]
+        ))
+
     session.shutdown()
     cluster.shutdown()
 
     print("   OK books   : {} rows".format(len(BOOKS)))
     print("   OK members : {} rows".format(len(MEMBERS)))
     print("   OK loans   : {} rows".format(len(LOANS)))
+    print("   OK education_demo.students    : {} rows".format(DEMO_RECORD_COUNT))
+    print("   OK education_demo.courses     : {} rows".format(len(COURSES)))
+    print("   OK education_demo.branches    : {} rows".format(len(BRANCHES)))
+    print("   OK education_demo.enrollments : {} rows".format(DEMO_RECORD_COUNT * 2))
 
 
 # ==============================================================
@@ -394,16 +738,103 @@ def seed_neo4j():
                     lid=l["loan_id"], date=l["date"], ret=l["returned"]
                 )
 
+        for department in DEPARTMENTS:
+            s.run(
+                "CREATE (:Department {id:$id,name:$name,building:$building})",
+                id=department["id"], name=department["name"], building=department["building"]
+            )
+        for branch in BRANCHES:
+            s.run(
+                "CREATE (:Branch {id:$id,name:$name,department_id:$department_id})",
+                id=branch["id"], name=branch["name"], department_id=branch["department_id"]
+            )
+        for instructor in INSTRUCTORS:
+            s.run(
+                "CREATE (:Instructor {id:$id,name:$name,department_id:$department_id})",
+                id=instructor["id"], name=instructor["name"], department_id=instructor["department_id"]
+            )
+        for course in COURSES:
+            s.run(
+                "CREATE (:Course {id:$id,title:$title,level:$level,department_id:$department_id,credits:$credits})",
+                id=course["id"], title=course["title"], level=course["level"],
+                department_id=course["department_id"], credits=course["credits"]
+            )
+
+        students = [make_student(i) for i in range(DEMO_RECORD_COUNT)]
+        for student in students:
+            s.run(
+                """
+CREATE (:Student {
+    id:$id,
+    name:$name,
+    email:$email,
+    program:$program,
+    year:$year,
+    country:$country,
+    gpa:$gpa
+})
+""",
+                id=student["student_id"], name=student["name"], email=student["email"],
+                program=student["program"], year=student["year"],
+                country=student["country"], gpa=student["gpa"]
+            )
+
+        for course in COURSES:
+            s.run(
+                "MATCH (c:Course {id:$cid}),(d:Department {id:$did}) "
+                "CREATE (c)-[:PART_OF]->(d)",
+                cid=course["id"], did=course["department_id"]
+            )
+        for branch in BRANCHES:
+            s.run(
+                "MATCH (b:Branch {id:$bid}),(d:Department {id:$did}) "
+                "CREATE (b)-[:OFFERED_BY]->(d)",
+                bid=branch["id"], did=branch["department_id"]
+            )
+        for i, instructor in enumerate(INSTRUCTORS):
+            course_ids = [course["id"] for course in COURSES if course["department_id"] == instructor["department_id"]]
+            for course_id in course_ids:
+                s.run(
+                    "MATCH (i:Instructor {id:$iid}),(c:Course {id:$cid}) "
+                    "CREATE (i)-[:TEACHES]->(c)",
+                    iid=instructor["id"], cid=course_id
+                )
+        for i, student in enumerate(students):
+            first_course = COURSES[i % len(COURSES)]["id"]
+            second_course = COURSES[(i + 2) % len(COURSES)]["id"]
+            s.run(
+                "MATCH (s:Student {id:$sid}),(b:Branch {id:$bid}) "
+                "CREATE (s)-[:SPECIALIZES_IN]->(b)",
+                sid=student["student_id"], bid=student["branch_id"]
+            )
+            for course_id in {first_course, second_course}:
+                s.run(
+                    "MATCH (s:Student {id:$sid}),(c:Course {id:$cid}) "
+                    "CREATE (s)-[:ENROLLED_IN {semester:$semester}]->(c)",
+                    sid=student["student_id"], cid=course_id,
+                    semester=random.choice(["2025-Fall", "2026-Spring"])
+                )
+
     with driver.session() as s:
         books   = s.run("MATCH (n:Book)   RETURN count(n) AS c").single()["c"]
         members = s.run("MATCH (n:Member) RETURN count(n) AS c").single()["c"]
         genres  = s.run("MATCH (n:Genre)  RETURN count(n) AS c").single()["c"]
+        students = s.run("MATCH (n:Student) RETURN count(n) AS c").single()["c"]
+        courses = s.run("MATCH (n:Course) RETURN count(n) AS c").single()["c"]
+        instructors = s.run("MATCH (n:Instructor) RETURN count(n) AS c").single()["c"]
+        departments = s.run("MATCH (n:Department) RETURN count(n) AS c").single()["c"]
+        branches = s.run("MATCH (n:Branch) RETURN count(n) AS c").single()["c"]
         rels    = s.run("MATCH ()-[r]->() RETURN count(r) AS c").single()["c"]
 
     print("   OK Book nodes    : {}".format(books))
     print("   OK Member nodes  : {}".format(members))
     print("   OK Genre nodes   : {}".format(genres))
-    print("   OK Relationships : {} (BORROWED + BELONGS_TO)".format(rels))
+    print("   OK Student nodes : {}".format(students))
+    print("   OK Course nodes  : {}".format(courses))
+    print("   OK Instructor nodes  : {}".format(instructors))
+    print("   OK Department nodes  : {}".format(departments))
+    print("   OK Branch nodes  : {}".format(branches))
+    print("   OK Relationships : {} (library + education)".format(rels))
     driver.close()
 
 
@@ -646,6 +1077,8 @@ def seed_neo4j_large(size):
             "FOR (p:Product) REQUIRE p.product_id IS UNIQUE"
         ).consume()
 
+        _clear_neo4j_benchmark_data(s)
+
         for start in range(0, size, batch_size):
             end = min(start + batch_size, size)
             rows = [make_user(i) for i in range(start, end)]
@@ -791,13 +1224,16 @@ if __name__ == "__main__":
 
     errors = []
 
-    for name, fn in [
-        ("MongoDB",   seed_mongodb),
-        ("Redis",     seed_redis),
-        ("Cassandra", seed_cassandra),
-        ("Neo4j",     seed_neo4j),
+    for name, reset_fn, fn in [
+        ("MongoDB",   reset_mongodb,   seed_mongodb),
+        ("Redis",     reset_redis,     seed_redis),
+        ("Cassandra", reset_cassandra, seed_cassandra),
+        ("Neo4j",     reset_neo4j,     seed_neo4j),
     ]:
         try:
+            print("\n[{}] Factory reset...".format(name))
+            reset_fn()
+            print("   OK reset complete")
             fn()
         except Exception:
             print("\n   ERROR in {}:".format(name))

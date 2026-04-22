@@ -7,6 +7,20 @@ from cassandra.policies import RoundRobinPolicy
 
 from config import PREVIEW_LIMIT
 
+CASSANDRA_SYSTEM_KEYSPACES = {
+    "system",
+    "system_schema",
+    "system_auth",
+    "system_traces",
+    "system_distributed",
+    "system_virtual_schema",
+    "system_views",
+}
+
+
+def is_system_keyspace(keyspace: str) -> bool:
+    return keyspace in CASSANDRA_SYSTEM_KEYSPACES or keyspace.startswith("system_")
+
 
 class CassandraConnector:
     def __init__(
@@ -69,7 +83,11 @@ class CassandraConnector:
     def list_keyspaces(self) -> List[str]:
         if not self.cluster:
             return []
-        return list(self.cluster.metadata.keyspaces.keys())
+        return [
+            keyspace
+            for keyspace in self.cluster.metadata.keyspaces.keys()
+            if not is_system_keyspace(keyspace)
+        ]
 
     def list_tables(self, keyspace: str) -> List[str]:
         if not self.cluster:

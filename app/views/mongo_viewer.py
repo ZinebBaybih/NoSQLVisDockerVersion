@@ -4,9 +4,11 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 from collections import Counter
 import csv
+import time
 from tkinter import filedialog
 
 from config import PAGE_SIZES, PREVIEW_LIMIT
+from utils.benchmark_logger import is_gui_benchmark_enabled, log_metric
 
 class MongoContentViewer:
     def __init__(self, parent, backend):
@@ -89,6 +91,15 @@ class MongoContentViewer:
         self.page_indicator_label.pack(side="left", padx=10)
         self.next_btn = ctk.CTkButton(self.pagination_frame, text="Next", width=100, command=self.go_next_page)
         self.next_btn.pack(side="left", padx=5)
+        ctk.CTkLabel(self.pagination_frame, text="Page size:").pack(side="left", padx=(16, 5))
+        self.page_size_dropdown_inline = ctk.CTkComboBox(
+            self.pagination_frame,
+            values=[str(size) for size in PAGE_SIZES],
+            variable=self.page_size_var,
+            width=100,
+            command=self.on_page_size_change,
+        )
+        self.page_size_dropdown_inline.pack(side="left", padx=5)
         self.pagination_frame.pack_forget()
 
         # Bouton retour
@@ -113,6 +124,23 @@ class MongoContentViewer:
         if callback:
             callback()
 
+    def log_gui_metric(self, metric, start, page_size="", page="", records_returned="", total_records="", status="ok", error=""):
+        if not is_gui_benchmark_enabled():
+            return
+        self.parent.update_idletasks()
+        log_metric(
+            database="MongoDB",
+            layer="gui",
+            metric=metric,
+            page_size=page_size,
+            page=page,
+            records_returned=records_returned,
+            total_records=total_records,
+            duration_ms=(time.perf_counter() - start) * 1000,
+            status=status,
+            error=error,
+        )
+
     def reset_pagination(self, total_records):
         self.current_page = 1
         self.total_records = int(total_records)
@@ -132,10 +160,18 @@ class MongoContentViewer:
         self.pagination_frame.pack(pady=(0, 5))
 
     def on_page_size_change(self, _value):
+        start = time.perf_counter()
         self.current_page_size = int(self.page_size_var.get())
         if self.current_level == "documents" and self.current_collection_name:
             self.current_page = 1
             self.render_documents_page()
+            self.log_gui_metric(
+                "page_size_change",
+                start,
+                page_size=self.current_page_size,
+                page=self.current_page,
+                total_records=self.total_records,
+            )
 
     def go_prev_page(self):
         if self.current_page > 1:
@@ -257,6 +293,11 @@ class MongoContentViewer:
 
     # ---------------------- COLLECTIONS ----------------------
     def show_collections(self, db_name):
+        start = time.perf_counter()
+        status = "ok"
+        error = ""
+        records_returned = ""
+        total_records = ""
         self.set_loading("Loading MongoDB collections...")
         try:
             self.clear_elements()
@@ -277,6 +318,8 @@ class MongoContentViewer:
 
             self.current_db_collections = cols
             total_docs = sum(col.get("count", 0) for col in cols)
+            records_returned = len(cols)
+            total_records = total_docs
             self.update_summary(
                 db_name=db_name,
                 collections_count=len(cols),
@@ -285,7 +328,19 @@ class MongoContentViewer:
 
             for col in cols:
                 self.create_collection_row(db_name, col)
+        except Exception as exc:
+            status = "error"
+            error = str(exc)
+            raise
         finally:
+            self.log_gui_metric(
+                "scope_load",
+                start,
+                records_returned=records_returned,
+                total_records=total_records,
+                status=status,
+                error=error,
+            )
             self.clear_loading()
 
     def create_collection_row(self, db_name, col):
@@ -353,11 +408,14 @@ class MongoContentViewer:
             selected_collection=col_name,
         )
         self.reset_pagination(total_count)
-        self.page_size_frame.pack(fill="x", padx=20, pady=(0, 8))
         self.preview_label.pack(fill="x", padx=20, pady=(0, 8))
         self.render_documents_page()
 
     def render_documents_page(self):
+        start = time.perf_counter()
+        status = "ok"
+        error = ""
+        docs = []
         self.set_loading("Loading MongoDB documents...")
         try:
             self.clear_elements()
@@ -394,7 +452,21 @@ class MongoContentViewer:
                 frame.doc_name = str(doc)
 
             self.update_pagination_controls()
+        except Exception as exc:
+            status = "error"
+            error = str(exc)
+            raise
         finally:
+            self.log_gui_metric(
+                "first_page" if self.current_page == 1 else "next_page",
+                start,
+                page_size=self.current_page_size,
+                page=self.current_page,
+                records_returned=len(docs),
+                total_records=self.total_records,
+                status=status,
+                error=error,
+            )
             self.clear_loading()
 
     # ---------------------- GRAPHIQUES ----------------------
@@ -420,6 +492,7 @@ class MongoContentViewer:
         self.show_graph_popup(f"Collection: {col_name}", labels, values, "Champs", "Occurrences")
 
     def show_graph_popup(self, title, labels, values, xlabel, ylabel):
+        start = time.perf_counter()
         if not labels:
             self.show_custom_popup("Aucune donnée à afficher", fg_color="#444")
             return
@@ -450,6 +523,7 @@ class MongoContentViewer:
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
         ctk.CTkButton(popup, text="Fermer", command=popup.destroy).pack(pady=10)
         plt.close(fig)
+        self.log_gui_metric("graph_prepare", start, records_returned=len(labels))
 
     # ---------------------- EXPORTS ----------------------
     def export_database_csv(self, db_name):
@@ -467,7 +541,12 @@ class MongoContentViewer:
                 writer = csv.writer(f)
                 writer.writerow(["Base", "Collection", "Clé", "Valeur"])
                 for col in cols:
-                    docs = self.backend.list_documents(db_name, col['name'])
+                    docs = self.backend.list_documents(
+                        db_name,
+                        col['name'],
+                        offset=0,
+                        limit=self.current_page_size,
+                    )
                     for doc in docs:
                         flat_doc = self.flatten_dict(doc)
                         for k, v in flat_doc.items():
@@ -478,7 +557,15 @@ class MongoContentViewer:
 
     def export_collection_csv(self, db_name, col_name):
         try:
-            docs = self.backend.list_documents(db_name, col_name)
+            offset = 0
+            if self.current_db_name == db_name and self.current_collection_name == col_name:
+                offset = (self.current_page - 1) * self.current_page_size
+            docs = self.backend.list_documents(
+                db_name,
+                col_name,
+                offset=offset,
+                limit=self.current_page_size,
+            )
             filepath = filedialog.asksaveasfilename(
                 title="Exporter la collection",
                 defaultextension=".csv",

@@ -1,7 +1,7 @@
 # app/models/connectors/neo4j_connector.py
 from neo4j import GraphDatabase
 
-from config import PREVIEW_LIMIT
+from config import NEO4J_GRAPH_PREVIEW_LIMIT, PREVIEW_LIMIT
 
 
 class Neo4jConnector:
@@ -58,15 +58,32 @@ class Neo4jConnector:
             return [r["props"] for r in session.run(query)]
 
 
-    def list_relationships(self, label):
+    def list_relationships(self, label, limit=NEO4J_GRAPH_PREVIEW_LIMIT):
         """
-        Return relationships for a given label:
-        (n:Label)-[r]->(m)
+        Return a bounded relationship neighborhood for a label.
+        This keeps the graph educational: selecting Student can reveal nearby
+        Course, Instructor, Branch, and Department nodes without rendering the
+        full database.
         """
         with self.driver.session() as session:
             query = f"""
-            MATCH (n:`{label}`)-[r]->(m)
+            MATCH (start:`{label}`)
+            WITH start
+            ORDER BY elementId(start)
+            LIMIT 12
+            MATCH path = (start)-[*1..2]-(neighbor)
+            UNWIND relationships(path) AS rel
+            WITH DISTINCT startNode(rel) AS n, rel AS r, endNode(rel) AS m
             RETURN n, r, m
-            LIMIT {PREVIEW_LIMIT}
+            LIMIT {int(limit)}
             """
             return list(session.run(query))
+
+    def count_relationships(self, label):
+        """Return the total number of relationships touching nodes with a label."""
+        with self.driver.session() as session:
+            query = f"""
+            MATCH (n:`{label}`)-[r]-()
+            RETURN count(r) AS c
+            """
+            return session.run(query).single()["c"]

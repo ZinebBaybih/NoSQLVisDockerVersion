@@ -3,6 +3,9 @@ from pymongo import MongoClient
 
 from config import PREVIEW_LIMIT
 
+MONGODB_SYSTEM_DATABASES = {"admin", "config", "local"}
+MONGODB_SYSTEM_COLLECTION_PREFIXES = ("system.",)
+
 
 class MongoConnector:
     def __init__(self, host="localhost", port=27017, user=None, password=None):
@@ -24,16 +27,24 @@ class MongoConnector:
         return [
             {
                 "name": db,
-                "count": len(self.client[db].list_collection_names())
+                "count": len(self.list_collection_names(db))
             }
             for db in self.client.list_database_names()
+            if db not in MONGODB_SYSTEM_DATABASES
+        ]
+
+    def list_collection_names(self, db_name):
+        return [
+            collection
+            for collection in self.client[db_name].list_collection_names()
+            if not collection.startswith(MONGODB_SYSTEM_COLLECTION_PREFIXES)
         ]
 
     def list_collections(self, db_name):
         db = self.client[db_name]
         return [
             {"name": c, "count": db[c].count_documents({})}
-            for c in db.list_collection_names()
+            for c in self.list_collection_names(db_name)
         ]
 
     def list_documents(self, db_name, col_name, offset=0, limit=PREVIEW_LIMIT):

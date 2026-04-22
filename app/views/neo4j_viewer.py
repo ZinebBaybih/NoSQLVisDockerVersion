@@ -2,11 +2,13 @@
 import customtkinter as ctk
 from tkinter import ttk, messagebox
 import csv
+import time
 from tkinter import filedialog
 import matplotlib.pyplot as plt
 import networkx as nx
 
-from config import PAGE_SIZES, PREVIEW_LIMIT
+from config import NEO4J_GRAPH_PREVIEW_LIMIT, PAGE_SIZES, PREVIEW_LIMIT
+from utils.benchmark_logger import is_gui_benchmark_enabled, log_metric
 
 class Neo4jContentViewer(ctk.CTkFrame):
     """Enhanced Neo4j viewer with node & relationship statistics."""
@@ -71,41 +73,43 @@ class Neo4jContentViewer(ctk.CTkFrame):
         self.back_btn.pack(side="left", padx=10)
 
         self.page_size_frame = ctk.CTkFrame(self, fg_color="#ffffff")
-        self.page_size_frame.pack(fill="x", pady=(0, 6))
-        ctk.CTkLabel(self.page_size_frame, text="Page size:").pack(side="left", padx=10)
-        self.page_size_var = ctk.StringVar(value=str(PREVIEW_LIMIT))
-        self.page_size_dropdown = ctk.CTkComboBox(
-            self.page_size_frame,
-            values=[str(size) for size in PAGE_SIZES],
-            variable=self.page_size_var,
-            width=100,
-            command=self.on_page_size_change,
-        )
-        self.page_size_dropdown.pack(side="left")
         self.page_size_frame.pack_forget()
-
-        self.preview_label = ctk.CTkLabel(self, text="", anchor="w", font=("Arial", 12))
-        self.preview_label.pack(fill="x", pady=(0, 4))
+        self.page_size_var = ctk.StringVar(value=str(PREVIEW_LIMIT))
 
         self.graph_note_label = ctk.CTkLabel(
             self,
-            text="Graph preview - first {} nodes shown".format(PREVIEW_LIMIT),
+            text="Graph preview - sampled 2-hop neighborhood, up to {} relationships shown".format(NEO4J_GRAPH_PREVIEW_LIMIT),
             anchor="w",
             font=("Arial", 12)
         )
         self.graph_note_label.pack(fill="x", pady=(0, 6))
 
+        self.node_controls_frame = ctk.CTkFrame(self, fg_color="#ffffff")
+        self.node_controls_frame.pack(fill="x", pady=(0, 4))
+
+        self.preview_label = ctk.CTkLabel(self.node_controls_frame, text="", anchor="w", font=("Arial", 12))
+        self.preview_label.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
         # ---------------- Node Details ----------------
         self.nodes_tree = ttk.Treeview(self, show="headings")
         self.nodes_tree.pack(fill="both", expand=True, pady=5)
 
-        self.pagination_frame = ctk.CTkFrame(self, fg_color="#ffffff")
+        self.pagination_frame = ctk.CTkFrame(self.node_controls_frame, fg_color="#ffffff")
         self.prev_btn = ctk.CTkButton(self.pagination_frame, text="Previous", width=100, command=self.go_prev_page)
         self.prev_btn.pack(side="left", padx=5)
         self.page_indicator_label = ctk.CTkLabel(self.pagination_frame, text="")
         self.page_indicator_label.pack(side="left", padx=10)
         self.next_btn = ctk.CTkButton(self.pagination_frame, text="Next", width=100, command=self.go_next_page)
         self.next_btn.pack(side="left", padx=5)
+        ctk.CTkLabel(self.pagination_frame, text="Page size:").pack(side="left", padx=(16, 5))
+        self.page_size_dropdown = ctk.CTkComboBox(
+            self.pagination_frame,
+            values=[str(size) for size in PAGE_SIZES],
+            variable=self.page_size_var,
+            width=100,
+            command=self.on_page_size_change,
+        )
+        self.page_size_dropdown.pack(side="left", padx=5)
         self.pagination_frame.pack_forget()
 
         self.show_labels()
@@ -120,8 +124,28 @@ class Neo4jContentViewer(ctk.CTkFrame):
         if callback:
             callback()
 
+    def log_gui_metric(self, metric, start, page_size="", page="", records_returned="", total_records="", status="ok", error=""):
+        if not is_gui_benchmark_enabled():
+            return
+        self.update_idletasks()
+        log_metric(
+            database="Neo4j",
+            layer="gui",
+            metric=metric,
+            page_size=page_size,
+            page=page,
+            records_returned=records_returned,
+            total_records=total_records,
+            duration_ms=(time.perf_counter() - start) * 1000,
+            status=status,
+            error=error,
+        )
+
     def show_labels(self):
         """Fetch and display label statistics (nodes + relations)."""
+        start = time.perf_counter()
+        records_returned = ""
+        total_records = ""
         self.set_loading("Loading Neo4j labels...")
         try:
             for i in self.labels_tree.get_children():
@@ -130,14 +154,14 @@ class Neo4jContentViewer(ctk.CTkFrame):
 
             try:
                 labels = self.backend.client.list_databases()
+                records_returned = len(labels)
 
                 for lbl in labels:
                     label_name = lbl["name"]
                     node_count = lbl["count"]
 
                     try:
-                        rels = self.backend.client.list_relationships(label_name)
-                        rel_count = len(rels)
+                        rel_count = self.backend.client.count_relationships(label_name)
                     except Exception:
                         rel_count = 0
 
@@ -147,10 +171,17 @@ class Neo4jContentViewer(ctk.CTkFrame):
                         "", "end",
                         values=(label_name, node_count, rel_count)
                     )
+                total_records = sum(self.label_counts.values())
 
             except Exception as e:
                 messagebox.showerror("Erreur", f"Impossible de charger les labels:\n{e}")
         finally:
+            self.log_gui_metric(
+                "scope_load",
+                start,
+                records_returned=records_returned,
+                total_records=total_records,
+            )
             self.clear_loading()
 
 
@@ -166,8 +197,6 @@ class Neo4jContentViewer(ctk.CTkFrame):
         self.total_records = self.selected_total_nodes
         self.current_page = 1
         self.current_page_size = int(self.page_size_var.get())
-        self.page_size_frame.pack(fill="x", pady=(0, 6))
-
         self.render_nodes_page()
 
         self.export_btn.configure(state="normal")
@@ -204,6 +233,8 @@ class Neo4jContentViewer(ctk.CTkFrame):
         self.update_pagination_controls()
 
     def render_nodes_page(self):
+        start = time.perf_counter()
+        nodes = []
         self.set_loading("Loading Neo4j nodes...")
         try:
             try:
@@ -217,6 +248,14 @@ class Neo4jContentViewer(ctk.CTkFrame):
             except Exception as e:
                 messagebox.showerror("Erreur", f"Erreur list_documents: {e}")
         finally:
+            self.log_gui_metric(
+                "first_page" if self.current_page == 1 else "next_page",
+                start,
+                page_size=self.current_page_size,
+                page=self.current_page,
+                records_returned=len(nodes),
+                total_records=self.total_records,
+            )
             self.clear_loading()
 
     def update_pagination_controls(self):
@@ -228,13 +267,21 @@ class Neo4jContentViewer(ctk.CTkFrame):
         self.page_indicator_label.configure(text="Page {} of {}".format(self.current_page, total_pages))
         self.prev_btn.configure(state="disabled" if self.current_page <= 1 else "normal")
         self.next_btn.configure(state="disabled" if self.current_page >= total_pages else "normal")
-        self.pagination_frame.pack(fill="x", pady=(0, 5))
+        self.pagination_frame.pack(side="right")
 
     def on_page_size_change(self, _value):
+        start = time.perf_counter()
         self.current_page_size = int(self.page_size_var.get())
         if self.selected_label:
             self.current_page = 1
             self.render_nodes_page()
+            self.log_gui_metric(
+                "page_size_change",
+                start,
+                page_size=self.current_page_size,
+                page=self.current_page,
+                total_records=self.total_records,
+            )
 
     def go_prev_page(self):
         if self.current_page > 1:
@@ -251,7 +298,12 @@ class Neo4jContentViewer(ctk.CTkFrame):
         if not self.selected_label:
             return
         try:
-            nodes = self.backend.client.list_documents(None, self.selected_label)
+            nodes = self.backend.client.list_documents(
+                None,
+                self.selected_label,
+                offset=(self.current_page - 1) * self.current_page_size,
+                limit=self.current_page_size,
+            )
             if not nodes:
                 messagebox.showinfo("Info", "Aucune donnée à exporter.")
                 return
@@ -280,8 +332,14 @@ class Neo4jContentViewer(ctk.CTkFrame):
         if not self.selected_label:
             return
 
+        start = time.perf_counter()
+        rel_count = ""
         try:
-            rels = self.backend.client.list_relationships(self.selected_label)
+            rels = self.backend.client.list_relationships(
+                self.selected_label,
+                limit=NEO4J_GRAPH_PREVIEW_LIMIT,
+            )
+            rel_count = len(rels)
             if not rels:
                 messagebox.showinfo("Info", "Aucune relation trouvée.")
                 return
@@ -363,6 +421,12 @@ class Neo4jContentViewer(ctk.CTkFrame):
             plt.axis("off")
             plt.tight_layout()
             plt.show()
+            self.log_gui_metric(
+                "graph_prepare",
+                start,
+                records_returned=rel_count,
+                total_records=self.total_records,
+            )
 
         except Exception as e:
             messagebox.showerror("Erreur", f"Erreur show_graph: {e}")
