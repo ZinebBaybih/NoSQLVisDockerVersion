@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   mongodb:
     image: mongo:6
@@ -35,3 +33,19 @@ services:
       NEO4J_server_memory_heap_initial__size: 512M
       NEO4J_server_memory_heap_max__size: 1G
     restart: unless-stopped
+
+  app:
+    build: .
+    container_name: nosqlvis-app
+    profiles:
+      - linux-gui
+    network_mode: host
+    environment:
+      DISPLAY: ${DISPLAY}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    depends_on:
+      - mongodb
+      - redis
+      - cassandra
+      - neo4j

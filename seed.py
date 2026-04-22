@@ -5,6 +5,7 @@ Requirements: docker-compose must be running (docker-compose up -d)
 """
 
 import argparse
+import copy
 import random
 import sys
 import time
@@ -280,6 +281,7 @@ LOANS = [
 ]
 
 DEMO_RECORD_COUNT = 240
+SMALL_DEMO_RECORD_COUNT = 180
 
 DEPARTMENTS = [
     {"id": "D01", "name": "Computer Science", "building": "Ada"},
@@ -338,6 +340,124 @@ def make_enrollment(i, student_id=None):
     }
 
 
+ECOMMERCE_CATEGORIES = [
+    {"id": "EC01", "name": "Electronics"},
+    {"id": "EC02", "name": "Books"},
+    {"id": "EC03", "name": "Home"},
+    {"id": "EC04", "name": "Sports"},
+    {"id": "EC05", "name": "Beauty"},
+]
+
+ORDER_STATUSES = ["created", "paid", "packed", "shipped", "delivered", "returned"]
+
+
+def make_ecommerce_customer(i):
+    first_name = FIRST_NAMES[(i * 2) % len(FIRST_NAMES)]
+    last_name = LAST_NAMES[(i * 5) % len(LAST_NAMES)]
+    return {
+        "customer_id": "CUST{:04d}".format(i),
+        "name": "{} {}".format(first_name, last_name),
+        "email": "customer{:04d}@shop.example".format(i),
+        "country": COUNTRIES[i % len(COUNTRIES)],
+        "segment": random.choice(["new", "regular", "loyal", "wholesale"]),
+        "joined_at": _random_datetime_within(900),
+    }
+
+
+def make_ecommerce_product(i):
+    category = ECOMMERCE_CATEGORIES[i % len(ECOMMERCE_CATEGORIES)]
+    return {
+        "product_id": "EP{:04d}".format(i),
+        "name": "{} {}".format(random.choice(PRODUCT_NAMES[category["name"]]), i),
+        "category_id": category["id"],
+        "category": category["name"],
+        "price": round(random.uniform(5.0, 750.0), 2),
+        "stock": random.randint(0, 250),
+        "rating": round(random.uniform(2.5, 5.0), 1),
+    }
+
+
+def make_order(i, customer_id=None):
+    item_count = random.randint(1, 4)
+    items = []
+    total = 0.0
+    for j in range(item_count):
+        product_id = "EP{:04d}".format((i + j * 7) % SMALL_DEMO_RECORD_COUNT)
+        quantity = random.randint(1, 3)
+        unit_price = round(random.uniform(5.0, 250.0), 2)
+        total += quantity * unit_price
+        items.append({
+            "product_id": product_id,
+            "quantity": quantity,
+            "unit_price": unit_price,
+        })
+    return {
+        "order_id": "ORD{:05d}".format(i),
+        "customer_id": customer_id or "CUST{:04d}".format(i % SMALL_DEMO_RECORD_COUNT),
+        "status": random.choice(ORDER_STATUSES),
+        "created_at": _random_datetime_within(365),
+        "total": round(total, 2),
+        "items": items,
+    }
+
+
+CLINICS = [
+    {"id": "CL01", "name": "Central Smile Clinic", "city": "Casablanca"},
+    {"id": "CL02", "name": "North Dental Care", "city": "Rabat"},
+    {"id": "CL03", "name": "Atlas Orthodontics", "city": "Marrakesh"},
+]
+
+DENTAL_SPECIALTIES = ["General Dentistry", "Orthodontics", "Endodontics", "Pediatric Dentistry"]
+
+TREATMENTS = [
+    {"id": "TR01", "name": "Cleaning", "category": "Preventive", "base_price": 60},
+    {"id": "TR02", "name": "Filling", "category": "Restorative", "base_price": 120},
+    {"id": "TR03", "name": "Root Canal", "category": "Endodontic", "base_price": 420},
+    {"id": "TR04", "name": "Braces Check", "category": "Orthodontic", "base_price": 90},
+    {"id": "TR05", "name": "Extraction", "category": "Surgical", "base_price": 180},
+]
+
+
+def make_patient(i):
+    first_name = FIRST_NAMES[(i * 4) % len(FIRST_NAMES)]
+    last_name = LAST_NAMES[(i * 6) % len(LAST_NAMES)]
+    return {
+        "patient_id": "PAT{:04d}".format(i),
+        "name": "{} {}".format(first_name, last_name),
+        "email": "patient{:04d}@clinic.example".format(i),
+        "age": random.randint(8, 78),
+        "insurance": random.choice(["basic", "premium", "student", "none"]),
+        "registered_at": _random_datetime_within(1200),
+    }
+
+
+def make_dentist(i):
+    first_name = FIRST_NAMES[(i * 3) % len(FIRST_NAMES)]
+    last_name = LAST_NAMES[(i * 2) % len(LAST_NAMES)]
+    clinic = CLINICS[i % len(CLINICS)]
+    return {
+        "dentist_id": "DEN{:03d}".format(i),
+        "name": "Dr. {} {}".format(first_name, last_name),
+        "specialty": DENTAL_SPECIALTIES[i % len(DENTAL_SPECIALTIES)],
+        "clinic_id": clinic["id"],
+        "years_experience": random.randint(2, 22),
+    }
+
+
+def make_appointment(i, patient_id=None):
+    treatment = TREATMENTS[i % len(TREATMENTS)]
+    return {
+        "appointment_id": "APT{:05d}".format(i),
+        "patient_id": patient_id or "PAT{:04d}".format(i % SMALL_DEMO_RECORD_COUNT),
+        "dentist_id": "DEN{:03d}".format(i % 12),
+        "treatment_id": treatment["id"],
+        "clinic_id": CLINICS[i % len(CLINICS)]["id"],
+        "date": _random_datetime_within(180),
+        "status": random.choice(["scheduled", "completed", "cancelled", "follow-up"]),
+        "cost": round(treatment["base_price"] * random.uniform(0.8, 1.4), 2),
+    }
+
+
 # ==============================================================
 # 1. MONGODB
 # ==============================================================
@@ -351,9 +471,9 @@ def seed_mongodb():
     db.members.drop()
     db.loans.drop()
 
-    db.books.insert_many(BOOKS)
-    db.members.insert_many(MEMBERS)
-    db.loans.insert_many(LOANS)
+    db.books.insert_many(copy.deepcopy(BOOKS))
+    db.members.insert_many(copy.deepcopy(MEMBERS))
+    db.loans.insert_many(copy.deepcopy(LOANS))
 
     print("   OK books   : {} documents".format(db.books.count_documents({})))
     print("   OK members : {} documents".format(db.members.count_documents({})))
@@ -370,15 +490,74 @@ def seed_mongodb():
         make_enrollment(i, student_id=students[i % len(students)]["student_id"])
         for i in range(DEMO_RECORD_COUNT * 2)
     ]
-    edu.students.insert_many(students)
-    edu.courses.insert_many(COURSES)
-    edu.branches.insert_many(BRANCHES)
-    edu.enrollments.insert_many(enrollments)
+    edu.students.insert_many(copy.deepcopy(students))
+    edu.courses.insert_many(copy.deepcopy(COURSES))
+    edu.branches.insert_many(copy.deepcopy(BRANCHES))
+    edu.enrollments.insert_many(copy.deepcopy(enrollments))
 
     print("   OK education_demo.students    : {} documents".format(edu.students.count_documents({})))
     print("   OK education_demo.courses     : {} documents".format(edu.courses.count_documents({})))
     print("   OK education_demo.branches    : {} documents".format(edu.branches.count_documents({})))
     print("   OK education_demo.enrollments : {} documents".format(edu.enrollments.count_documents({})))
+
+    ecommerce = client["ecommerce_demo"]
+    ecommerce.customers.drop()
+    ecommerce.products.drop()
+    ecommerce.categories.drop()
+    ecommerce.orders.drop()
+    ecommerce.carts.drop()
+
+    customers = [make_ecommerce_customer(i) for i in range(SMALL_DEMO_RECORD_COUNT)]
+    products = [make_ecommerce_product(i) for i in range(SMALL_DEMO_RECORD_COUNT)]
+    orders = [
+        make_order(i, customer_id=customers[i % len(customers)]["customer_id"])
+        for i in range(SMALL_DEMO_RECORD_COUNT * 2)
+    ]
+    carts = [
+        {
+            "cart_id": "CART{:04d}".format(i),
+            "customer_id": customers[i]["customer_id"],
+            "items": [orders[i]["items"][0]],
+            "updated_at": _random_datetime_within(30),
+        }
+        for i in range(min(80, len(customers)))
+    ]
+    ecommerce.customers.insert_many(copy.deepcopy(customers))
+    ecommerce.products.insert_many(copy.deepcopy(products))
+    ecommerce.categories.insert_many(copy.deepcopy(ECOMMERCE_CATEGORIES))
+    ecommerce.orders.insert_many(copy.deepcopy(orders))
+    ecommerce.carts.insert_many(copy.deepcopy(carts))
+
+    print("   OK ecommerce_demo.customers  : {} documents".format(ecommerce.customers.count_documents({})))
+    print("   OK ecommerce_demo.products   : {} documents".format(ecommerce.products.count_documents({})))
+    print("   OK ecommerce_demo.categories : {} documents".format(ecommerce.categories.count_documents({})))
+    print("   OK ecommerce_demo.orders     : {} documents".format(ecommerce.orders.count_documents({})))
+    print("   OK ecommerce_demo.carts      : {} documents".format(ecommerce.carts.count_documents({})))
+
+    dentist = client["dentist_demo"]
+    dentist.patients.drop()
+    dentist.dentists.drop()
+    dentist.clinics.drop()
+    dentist.treatments.drop()
+    dentist.appointments.drop()
+
+    patients = [make_patient(i) for i in range(SMALL_DEMO_RECORD_COUNT)]
+    dentists = [make_dentist(i) for i in range(12)]
+    appointments = [
+        make_appointment(i, patient_id=patients[i % len(patients)]["patient_id"])
+        for i in range(SMALL_DEMO_RECORD_COUNT * 2)
+    ]
+    dentist.patients.insert_many(copy.deepcopy(patients))
+    dentist.dentists.insert_many(copy.deepcopy(dentists))
+    dentist.clinics.insert_many(copy.deepcopy(CLINICS))
+    dentist.treatments.insert_many(copy.deepcopy(TREATMENTS))
+    dentist.appointments.insert_many(copy.deepcopy(appointments))
+
+    print("   OK dentist_demo.patients     : {} documents".format(dentist.patients.count_documents({})))
+    print("   OK dentist_demo.dentists     : {} documents".format(dentist.dentists.count_documents({})))
+    print("   OK dentist_demo.clinics      : {} documents".format(dentist.clinics.count_documents({})))
+    print("   OK dentist_demo.treatments   : {} documents".format(dentist.treatments.count_documents({})))
+    print("   OK dentist_demo.appointments : {} documents".format(dentist.appointments.count_documents({})))
     client.close()
 
 
@@ -427,11 +606,19 @@ def seed_redis():
     pipe.set("campus:student_count", str(len(students)))
 
     for department in DEPARTMENTS:
-        pipe.hset("department:{}".format(department["id"]), mapping=department)
+        pipe.hset("department:{}".format(department["id"]), mapping={
+            "id": department["id"],
+            "name": department["name"],
+            "building": department["building"],
+        })
         pipe.sadd("departments", department["id"])
 
     for branch in BRANCHES:
-        pipe.hset("branch:{}".format(branch["id"]), mapping=branch)
+        pipe.hset("branch:{}".format(branch["id"]), mapping={
+            "id": branch["id"],
+            "name": branch["name"],
+            "department_id": branch["department_id"],
+        })
         pipe.sadd("branches:{}".format(branch["department_id"]), branch["id"])
 
     for course in COURSES:
@@ -471,6 +658,118 @@ def seed_redis():
 
     pipe.execute()
     print("   OK Redis DB 2 education mixed keys : {}".format(edu.dbsize()))
+
+    ecommerce = redis.Redis(host="localhost", port=6379, db=3, decode_responses=True)
+    ecommerce.flushdb()
+    pipe = ecommerce.pipeline()
+    ecommerce_customers = [make_ecommerce_customer(i) for i in range(SMALL_DEMO_RECORD_COUNT)]
+    ecommerce_products = [make_ecommerce_product(i) for i in range(SMALL_DEMO_RECORD_COUNT)]
+
+    pipe.set("store:name", "NoSQL Vis Shop")
+    pipe.set("store:active_customers", str(len(ecommerce_customers)))
+    for category in ECOMMERCE_CATEGORIES:
+        pipe.hset("category:{}".format(category["id"]), mapping={
+            "id": category["id"],
+            "name": category["name"],
+        })
+        pipe.sadd("categories", category["id"])
+    for product in ecommerce_products:
+        pipe.hset("product:{}".format(product["product_id"]), mapping={
+            "product_id": product["product_id"],
+            "name": product["name"],
+            "category_id": product["category_id"],
+            "category": product["category"],
+            "price": str(product["price"]),
+            "stock": str(product["stock"]),
+            "rating": str(product["rating"]),
+        })
+        pipe.zadd("products:by_rating", {product["product_id"]: product["rating"]})
+        pipe.sadd("products:category:{}".format(product["category_id"]), product["product_id"])
+    for i, customer in enumerate(ecommerce_customers):
+        order = make_order(i, customer_id=customer["customer_id"])
+        pipe.hset("customer:{}".format(customer["customer_id"]), mapping=customer)
+        pipe.hset("order:{}".format(order["order_id"]), mapping={
+            "order_id": order["order_id"],
+            "customer_id": order["customer_id"],
+            "status": order["status"],
+            "created_at": order["created_at"],
+            "total": str(order["total"]),
+        })
+        pipe.rpush("customer:{}:orders".format(customer["customer_id"]), order["order_id"])
+        pipe.xadd("stream:orders", {
+            "order_id": order["order_id"],
+            "customer_id": order["customer_id"],
+            "status": order["status"],
+            "total": str(order["total"]),
+        }, maxlen=500, approximate=True)
+        if (i + 1) % 100 == 0:
+            pipe.execute()
+    pipe.execute()
+    print("   OK Redis DB 3 ecommerce mixed keys : {}".format(ecommerce.dbsize()))
+
+    dentist = redis.Redis(host="localhost", port=6379, db=4, decode_responses=True)
+    dentist.flushdb()
+    pipe = dentist.pipeline()
+    patients = [make_patient(i) for i in range(SMALL_DEMO_RECORD_COUNT)]
+    dentists = [make_dentist(i) for i in range(12)]
+
+    pipe.set("clinic:network", "NoSQL Vis Dental")
+    pipe.set("clinic:patient_count", str(len(patients)))
+    for clinic in CLINICS:
+        pipe.hset("clinic:{}".format(clinic["id"]), mapping={
+            "id": clinic["id"],
+            "name": clinic["name"],
+            "city": clinic["city"],
+        })
+        pipe.sadd("clinics", clinic["id"])
+    for treatment in TREATMENTS:
+        pipe.hset("treatment:{}".format(treatment["id"]), mapping={
+            "id": treatment["id"],
+            "name": treatment["name"],
+            "category": treatment["category"],
+            "base_price": str(treatment["base_price"]),
+        })
+        pipe.sadd("treatments:{}".format(treatment["category"]), treatment["id"])
+    for dentist_row in dentists:
+        pipe.hset("dentist:{}".format(dentist_row["dentist_id"]), mapping={
+            "dentist_id": dentist_row["dentist_id"],
+            "name": dentist_row["name"],
+            "specialty": dentist_row["specialty"],
+            "clinic_id": dentist_row["clinic_id"],
+            "years_experience": str(dentist_row["years_experience"]),
+        })
+        pipe.sadd("dentists:specialty:{}".format(dentist_row["specialty"].replace(" ", "_")), dentist_row["dentist_id"])
+    for i, patient in enumerate(patients):
+        appointment = make_appointment(i, patient_id=patient["patient_id"])
+        pipe.hset("patient:{}".format(patient["patient_id"]), mapping={
+            "patient_id": patient["patient_id"],
+            "name": patient["name"],
+            "email": patient["email"],
+            "age": str(patient["age"]),
+            "insurance": patient["insurance"],
+            "registered_at": patient["registered_at"],
+        })
+        pipe.hset("appointment:{}".format(appointment["appointment_id"]), mapping={
+            "appointment_id": appointment["appointment_id"],
+            "patient_id": appointment["patient_id"],
+            "dentist_id": appointment["dentist_id"],
+            "treatment_id": appointment["treatment_id"],
+            "clinic_id": appointment["clinic_id"],
+            "date": appointment["date"],
+            "status": appointment["status"],
+            "cost": str(appointment["cost"]),
+        })
+        pipe.rpush("patient:{}:appointments".format(patient["patient_id"]), appointment["appointment_id"])
+        pipe.zadd("appointments:by_cost", {appointment["appointment_id"]: appointment["cost"]})
+        pipe.xadd("stream:appointments", {
+            "appointment_id": appointment["appointment_id"],
+            "patient_id": appointment["patient_id"],
+            "status": appointment["status"],
+        }, maxlen=500, approximate=True)
+        if (i + 1) % 100 == 0:
+            pipe.execute()
+    pipe.execute()
+    print("   OK Redis DB 4 dentist mixed keys : {}".format(dentist.dbsize()))
 
 
 # ==============================================================
@@ -660,6 +959,205 @@ CREATE TABLE enrollments (
             enrollment["semester"], enrollment["status"], enrollment["grade"]
         ))
 
+    session.execute("""
+CREATE KEYSPACE IF NOT EXISTS ecommerce_demo
+WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}
+""")
+    session.set_keyspace("ecommerce_demo")
+
+    for table in ("orders", "carts", "products", "customers", "categories"):
+        session.execute("DROP TABLE IF EXISTS {}".format(table))
+
+    session.execute("""
+CREATE TABLE customers (
+    customer_id TEXT PRIMARY KEY,
+    name TEXT,
+    email TEXT,
+    country TEXT,
+    segment TEXT,
+    joined_at TEXT
+)
+""")
+    session.execute("""
+CREATE TABLE categories (
+    category_id TEXT PRIMARY KEY,
+    name TEXT
+)
+""")
+    session.execute("""
+CREATE TABLE products (
+    product_id TEXT PRIMARY KEY,
+    name TEXT,
+    category_id TEXT,
+    category TEXT,
+    price FLOAT,
+    stock INT,
+    rating FLOAT
+)
+""")
+    session.execute("""
+CREATE TABLE orders (
+    order_id TEXT PRIMARY KEY,
+    customer_id TEXT,
+    status TEXT,
+    created_at TEXT,
+    total FLOAT,
+    item_count INT
+)
+""")
+    session.execute("""
+CREATE TABLE carts (
+    cart_id TEXT PRIMARY KEY,
+    customer_id TEXT,
+    product_id TEXT,
+    quantity INT,
+    updated_at TEXT
+)
+""")
+
+    customer_stmt = session.prepare(
+        "INSERT INTO customers (customer_id, name, email, country, segment, joined_at) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    category_stmt = session.prepare(
+        "INSERT INTO categories (category_id, name) VALUES (?, ?)"
+    )
+    product_stmt = session.prepare(
+        "INSERT INTO products (product_id, name, category_id, category, price, stock, rating) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+    order_stmt = session.prepare(
+        "INSERT INTO orders (order_id, customer_id, status, created_at, total, item_count) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    cart_stmt = session.prepare(
+        "INSERT INTO carts (cart_id, customer_id, product_id, quantity, updated_at) VALUES (?, ?, ?, ?, ?)"
+    )
+
+    ecommerce_customers = [make_ecommerce_customer(i) for i in range(SMALL_DEMO_RECORD_COUNT)]
+    ecommerce_products = [make_ecommerce_product(i) for i in range(SMALL_DEMO_RECORD_COUNT)]
+    for customer in ecommerce_customers:
+        session.execute(customer_stmt, (
+            customer["customer_id"], customer["name"], customer["email"],
+            customer["country"], customer["segment"], customer["joined_at"]
+        ))
+    for category in ECOMMERCE_CATEGORIES:
+        session.execute(category_stmt, (category["id"], category["name"]))
+    for product in ecommerce_products:
+        session.execute(product_stmt, (
+            product["product_id"], product["name"], product["category_id"],
+            product["category"], product["price"], product["stock"], product["rating"]
+        ))
+    for i in range(SMALL_DEMO_RECORD_COUNT * 2):
+        order = make_order(i, customer_id=ecommerce_customers[i % len(ecommerce_customers)]["customer_id"])
+        session.execute(order_stmt, (
+            order["order_id"], order["customer_id"], order["status"],
+            order["created_at"], order["total"], len(order["items"])
+        ))
+    for i in range(80):
+        session.execute(cart_stmt, (
+            "CART{:04d}".format(i),
+            ecommerce_customers[i % len(ecommerce_customers)]["customer_id"],
+            ecommerce_products[i % len(ecommerce_products)]["product_id"],
+            random.randint(1, 4),
+            _random_datetime_within(30),
+        ))
+
+    session.execute("""
+CREATE KEYSPACE IF NOT EXISTS dentist_demo
+WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}
+""")
+    session.set_keyspace("dentist_demo")
+
+    for table in ("appointments", "patients", "dentists", "treatments", "clinics"):
+        session.execute("DROP TABLE IF EXISTS {}".format(table))
+
+    session.execute("""
+CREATE TABLE patients (
+    patient_id TEXT PRIMARY KEY,
+    name TEXT,
+    email TEXT,
+    age INT,
+    insurance TEXT,
+    registered_at TEXT
+)
+""")
+    session.execute("""
+CREATE TABLE dentists (
+    dentist_id TEXT PRIMARY KEY,
+    name TEXT,
+    specialty TEXT,
+    clinic_id TEXT,
+    years_experience INT
+)
+""")
+    session.execute("""
+CREATE TABLE clinics (
+    clinic_id TEXT PRIMARY KEY,
+    name TEXT,
+    city TEXT
+)
+""")
+    session.execute("""
+CREATE TABLE treatments (
+    treatment_id TEXT PRIMARY KEY,
+    name TEXT,
+    category TEXT,
+    base_price FLOAT
+)
+""")
+    session.execute("""
+CREATE TABLE appointments (
+    appointment_id TEXT PRIMARY KEY,
+    patient_id TEXT,
+    dentist_id TEXT,
+    treatment_id TEXT,
+    clinic_id TEXT,
+    date TEXT,
+    status TEXT,
+    cost FLOAT
+)
+""")
+
+    patient_stmt = session.prepare(
+        "INSERT INTO patients (patient_id, name, email, age, insurance, registered_at) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    dentist_stmt = session.prepare(
+        "INSERT INTO dentists (dentist_id, name, specialty, clinic_id, years_experience) VALUES (?, ?, ?, ?, ?)"
+    )
+    clinic_stmt = session.prepare(
+        "INSERT INTO clinics (clinic_id, name, city) VALUES (?, ?, ?)"
+    )
+    treatment_stmt = session.prepare(
+        "INSERT INTO treatments (treatment_id, name, category, base_price) VALUES (?, ?, ?, ?)"
+    )
+    appointment_stmt = session.prepare(
+        "INSERT INTO appointments (appointment_id, patient_id, dentist_id, treatment_id, clinic_id, date, status, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+
+    patients = [make_patient(i) for i in range(SMALL_DEMO_RECORD_COUNT)]
+    dentists = [make_dentist(i) for i in range(12)]
+    for patient in patients:
+        session.execute(patient_stmt, (
+            patient["patient_id"], patient["name"], patient["email"],
+            patient["age"], patient["insurance"], patient["registered_at"]
+        ))
+    for dentist_row in dentists:
+        session.execute(dentist_stmt, (
+            dentist_row["dentist_id"], dentist_row["name"], dentist_row["specialty"],
+            dentist_row["clinic_id"], dentist_row["years_experience"]
+        ))
+    for clinic in CLINICS:
+        session.execute(clinic_stmt, (clinic["id"], clinic["name"], clinic["city"]))
+    for treatment in TREATMENTS:
+        session.execute(treatment_stmt, (
+            treatment["id"], treatment["name"], treatment["category"], treatment["base_price"]
+        ))
+    for i in range(SMALL_DEMO_RECORD_COUNT * 2):
+        appointment = make_appointment(i, patient_id=patients[i % len(patients)]["patient_id"])
+        session.execute(appointment_stmt, (
+            appointment["appointment_id"], appointment["patient_id"], appointment["dentist_id"],
+            appointment["treatment_id"], appointment["clinic_id"], appointment["date"],
+            appointment["status"], appointment["cost"]
+        ))
+
     session.shutdown()
     cluster.shutdown()
 
@@ -670,6 +1168,13 @@ CREATE TABLE enrollments (
     print("   OK education_demo.courses     : {} rows".format(len(COURSES)))
     print("   OK education_demo.branches    : {} rows".format(len(BRANCHES)))
     print("   OK education_demo.enrollments : {} rows".format(DEMO_RECORD_COUNT * 2))
+    print("   OK ecommerce_demo.customers   : {} rows".format(SMALL_DEMO_RECORD_COUNT))
+    print("   OK ecommerce_demo.products    : {} rows".format(SMALL_DEMO_RECORD_COUNT))
+    print("   OK ecommerce_demo.orders      : {} rows".format(SMALL_DEMO_RECORD_COUNT * 2))
+    print("   OK ecommerce_demo.carts       : {} rows".format(80))
+    print("   OK dentist_demo.patients      : {} rows".format(SMALL_DEMO_RECORD_COUNT))
+    print("   OK dentist_demo.dentists      : {} rows".format(12))
+    print("   OK dentist_demo.appointments  : {} rows".format(SMALL_DEMO_RECORD_COUNT * 2))
 
 
 # ==============================================================
@@ -815,6 +1320,152 @@ CREATE (:Student {
                     semester=random.choice(["2025-Fall", "2026-Spring"])
                 )
 
+        ecommerce_customers = [make_ecommerce_customer(i) for i in range(SMALL_DEMO_RECORD_COUNT)]
+        ecommerce_products = [make_ecommerce_product(i) for i in range(SMALL_DEMO_RECORD_COUNT)]
+        for category in ECOMMERCE_CATEGORIES:
+            s.run(
+                "CREATE (:Category {id:$id,name:$name})",
+                id=category["id"], name=category["name"]
+            )
+        for customer in ecommerce_customers:
+            s.run(
+                """
+CREATE (:Customer {
+    id:$id,
+    name:$name,
+    email:$email,
+    country:$country,
+    segment:$segment,
+    joined_at:$joined_at
+})
+""",
+                id=customer["customer_id"], name=customer["name"], email=customer["email"],
+                country=customer["country"], segment=customer["segment"], joined_at=customer["joined_at"]
+            )
+        for product in ecommerce_products:
+            s.run(
+                """
+CREATE (:EcommerceProduct {
+    id:$id,
+    name:$name,
+    category_id:$category_id,
+    price:$price,
+    stock:$stock,
+    rating:$rating
+})
+""",
+                id=product["product_id"], name=product["name"], category_id=product["category_id"],
+                price=product["price"], stock=product["stock"], rating=product["rating"]
+            )
+            s.run(
+                "MATCH (p:EcommerceProduct {id:$pid}),(c:Category {id:$cid}) "
+                "CREATE (p)-[:IN_CATEGORY]->(c)",
+                pid=product["product_id"], cid=product["category_id"]
+            )
+        for i in range(SMALL_DEMO_RECORD_COUNT):
+            order = make_order(i, customer_id=ecommerce_customers[i]["customer_id"])
+            s.run(
+                "CREATE (:PurchaseOrder {id:$id,status:$status,created_at:$created_at,total:$total})",
+                id=order["order_id"], status=order["status"],
+                created_at=order["created_at"], total=order["total"]
+            )
+            s.run(
+                "MATCH (c:Customer {id:$cid}),(o:PurchaseOrder {id:$oid}) "
+                "CREATE (c)-[:PLACED]->(o)",
+                cid=order["customer_id"], oid=order["order_id"]
+            )
+            for item in order["items"][:2]:
+                s.run(
+                    "MATCH (o:PurchaseOrder {id:$oid}),(p:EcommerceProduct {id:$pid}) "
+                    "CREATE (o)-[:CONTAINS {quantity:$quantity,unit_price:$unit_price}]->(p)",
+                    oid=order["order_id"], pid=item["product_id"],
+                    quantity=item["quantity"], unit_price=item["unit_price"]
+                )
+            if i < 60:
+                cart_id = "CART{:04d}".format(i)
+                product_id = order["items"][0]["product_id"]
+                s.run("CREATE (:Cart {id:$id,updated_at:$updated_at})", id=cart_id, updated_at=_random_datetime_within(30))
+                s.run(
+                    "MATCH (c:Customer {id:$cid}),(cart:Cart {id:$cart_id}),(p:EcommerceProduct {id:$pid}) "
+                    "CREATE (c)-[:OWNS]->(cart) "
+                    "CREATE (cart)-[:HOLDS]->(p)",
+                    cid=order["customer_id"], cart_id=cart_id, pid=product_id
+                )
+
+        patients = [make_patient(i) for i in range(SMALL_DEMO_RECORD_COUNT)]
+        dentists = [make_dentist(i) for i in range(12)]
+        for clinic in CLINICS:
+            s.run(
+                "CREATE (:Clinic {id:$id,name:$name,city:$city})",
+                id=clinic["id"], name=clinic["name"], city=clinic["city"]
+            )
+        for treatment in TREATMENTS:
+            s.run(
+                "CREATE (:Treatment {id:$id,name:$name,category:$category,base_price:$base_price})",
+                id=treatment["id"], name=treatment["name"],
+                category=treatment["category"], base_price=treatment["base_price"]
+            )
+        for dentist_row in dentists:
+            s.run(
+                """
+CREATE (:Dentist {
+    id:$id,
+    name:$name,
+    specialty:$specialty,
+    clinic_id:$clinic_id,
+    years_experience:$years_experience
+})
+""",
+                id=dentist_row["dentist_id"], name=dentist_row["name"],
+                specialty=dentist_row["specialty"], clinic_id=dentist_row["clinic_id"],
+                years_experience=dentist_row["years_experience"]
+            )
+            s.run(
+                "MATCH (d:Dentist {id:$did}),(c:Clinic {id:$cid}) "
+                "CREATE (d)-[:WORKS_AT]->(c)",
+                did=dentist_row["dentist_id"], cid=dentist_row["clinic_id"]
+            )
+        for patient in patients:
+            s.run(
+                """
+CREATE (:Patient {
+    id:$id,
+    name:$name,
+    email:$email,
+    age:$age,
+    insurance:$insurance,
+    registered_at:$registered_at
+})
+""",
+                id=patient["patient_id"], name=patient["name"], email=patient["email"],
+                age=patient["age"], insurance=patient["insurance"], registered_at=patient["registered_at"]
+            )
+        for i in range(SMALL_DEMO_RECORD_COUNT):
+            appointment = make_appointment(i, patient_id=patients[i]["patient_id"])
+            s.run(
+                """
+CREATE (:Appointment {
+    id:$id,
+    date:$date,
+    status:$status,
+    cost:$cost
+})
+""",
+                id=appointment["appointment_id"], date=appointment["date"],
+                status=appointment["status"], cost=appointment["cost"]
+            )
+            s.run(
+                "MATCH (p:Patient {id:$pid}),(a:Appointment {id:$aid}),"
+                "(d:Dentist {id:$did}),(t:Treatment {id:$tid}),(c:Clinic {id:$cid}) "
+                "CREATE (p)-[:BOOKED]->(a) "
+                "CREATE (a)-[:WITH_DENTIST]->(d) "
+                "CREATE (a)-[:FOR_TREATMENT]->(t) "
+                "CREATE (a)-[:AT_CLINIC]->(c)",
+                pid=appointment["patient_id"], aid=appointment["appointment_id"],
+                did=appointment["dentist_id"], tid=appointment["treatment_id"],
+                cid=appointment["clinic_id"]
+            )
+
     with driver.session() as s:
         books   = s.run("MATCH (n:Book)   RETURN count(n) AS c").single()["c"]
         members = s.run("MATCH (n:Member) RETURN count(n) AS c").single()["c"]
@@ -824,6 +1475,12 @@ CREATE (:Student {
         instructors = s.run("MATCH (n:Instructor) RETURN count(n) AS c").single()["c"]
         departments = s.run("MATCH (n:Department) RETURN count(n) AS c").single()["c"]
         branches = s.run("MATCH (n:Branch) RETURN count(n) AS c").single()["c"]
+        customers = s.run("MATCH (n:Customer) RETURN count(n) AS c").single()["c"]
+        ecommerce_products_count = s.run("MATCH (n:EcommerceProduct) RETURN count(n) AS c").single()["c"]
+        orders = s.run("MATCH (n:PurchaseOrder) RETURN count(n) AS c").single()["c"]
+        patients = s.run("MATCH (n:Patient) RETURN count(n) AS c").single()["c"]
+        dentists = s.run("MATCH (n:Dentist) RETURN count(n) AS c").single()["c"]
+        appointments = s.run("MATCH (n:Appointment) RETURN count(n) AS c").single()["c"]
         rels    = s.run("MATCH ()-[r]->() RETURN count(r) AS c").single()["c"]
 
     print("   OK Book nodes    : {}".format(books))
@@ -834,7 +1491,13 @@ CREATE (:Student {
     print("   OK Instructor nodes  : {}".format(instructors))
     print("   OK Department nodes  : {}".format(departments))
     print("   OK Branch nodes  : {}".format(branches))
-    print("   OK Relationships : {} (library + education)".format(rels))
+    print("   OK Customer nodes : {}".format(customers))
+    print("   OK EcommerceProduct nodes : {}".format(ecommerce_products_count))
+    print("   OK Order nodes    : {}".format(orders))
+    print("   OK Patient nodes  : {}".format(patients))
+    print("   OK Dentist nodes  : {}".format(dentists))
+    print("   OK Appointment nodes : {}".format(appointments))
+    print("   OK Relationships : {} (library + education + ecommerce + dentist)".format(rels))
     driver.close()
 
 
