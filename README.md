@@ -26,7 +26,6 @@ The application is designed for learning, comparison, and lightweight visual ins
 app/                         GUI, connectors, views, and utilities
 seed.py                      Optional demo and benchmark data seeder
 scripts/benchmark_backend.py Optional backend benchmark runner
-docs/                        Development and performance notes
 docker-compose.yml           Database services, plus optional Linux GUI profile
 Dockerfile                   Linux GUI application image
 ```

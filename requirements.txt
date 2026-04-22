@@ -7,3 +7,4 @@ networkx
 tksheet
 cassandra-driver==3.29.3
 pyasyncore==1.0.5
+Pillow
