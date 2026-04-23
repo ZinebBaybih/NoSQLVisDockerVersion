@@ -56,35 +56,27 @@ On Windows, the recommended setup is to run the databases with Docker Compose an
 1. Start the databases:
 
 ```powershell
-docker compose up -d mongodb redis cassandra neo4j
+docker compose up -d
 ```
 
-2. Create and activate a virtual environment:
+2. Create the virtual environment, activate it, install dependencies, and seed the demo data:
 
 ```powershell
 python -m venv venv
 .\venv\Scripts\Activate.ps1
-```
-
-3. Install dependencies:
-
-```powershell
 pip install -r requirements.txt
-```
-
-4. Seed the demo data:
-
-```powershell
 python seed.py
 ```
 
-5. Launch the application:
+3. Launch the application:
 
 ```powershell
 python app/main.py
 ```
 
 Use `localhost` as the host in the connection screen.
+
+If you want to reset the demo environment first, run `docker compose down -v` before the steps above. This is optional and removes the project's Docker volumes.
 
 ## Quick Start on Linux
 
@@ -99,7 +91,7 @@ xhost +local:docker
 2. Start the databases:
 
 ```bash
-docker compose up -d mongodb redis cassandra neo4j
+docker compose up -d
 ```
 
 3. Seed the demo data from the application image:
@@ -124,7 +116,7 @@ xhost -local:docker
 
 ## Seeding Data
 
-`seed.py` is separate from application launch on purpose. This makes the reset step explicit and avoids silently deleting or replacing data when the app starts.
+`seed.py` is shown as a separate step on purpose. This makes the reset step explicit and avoids silently deleting or replacing data when the app starts.
 
 Run the standard educational seed:
 
@@ -148,18 +140,6 @@ Redis uses logical databases:
 
 The seeder performs a factory reset of app-owned demo scopes before inserting data. Do not point it at production or shared external databases.
 
-## Optional Large Benchmark Seed
-
-Large benchmark data is separate from the educational datasets:
-
-```bash
-python seed.py --large --size 1000
-python seed.py --large --size 10000
-python seed.py --large --size 100000
-```
-
-The benchmark seed creates a `benchmark` dataset for MongoDB, Redis DB `1`, Cassandra, and Neo4j. Use it only when reproducing performance experiments or stress-testing pagination behavior.
-
 ## Tutorial Walkthrough
 
 After starting the databases, seeding, and launching the app:
@@ -179,9 +159,17 @@ Suggested learning path:
 
 The app intentionally shows controlled previews. Larger tables and graphs should be explored through pagination and sampled visual summaries rather than full-dataset rendering.
 
-## Benchmarks and Performance Reproducibility
+## Optional Large Benchmark Seed
 
-Benchmarking is optional and mainly intended for reproducing results discussed in the related research article. It is not required for classroom or self-learning use.
+Large benchmark data is separate from the educational datasets:
+
+```bash
+python seed.py --large --size 1000
+python seed.py --large --size 10000
+python seed.py --large --size 100000
+```
+
+The benchmark seed creates a `benchmark` dataset for MongoDB, Redis DB `1`, Cassandra, and Neo4j. To use only when reproducing performance testing. It is not required for classroom or self-learning use.
 
 Backend benchmark example:
 
@@ -197,7 +185,7 @@ $env:NOSQL_VIS_DATASET_SIZE="1K"
 python app/main.py
 ```
 
-Generated CSV outputs are written under `results/benchmarks/`. The `results/` directory is ignored by Git because these files are generated artifacts. Commit scripts and methodology; regenerate raw benchmark outputs when needed.
+Generated CSV outputs are written under `results/benchmarks/`.
 
 ## Stopping Services
 
@@ -227,4 +215,3 @@ This project is released under the MIT License. See [LICENSE](LICENSE) for detai
 ## Citation
 
 If you use NoSQL Vis in academic work, please cite the corresponding publication when available.
-
