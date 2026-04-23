@@ -499,6 +499,11 @@ class MongoContentViewer:
         popup = ctk.CTkToplevel(self.parent)
         popup.title(title)
         popup.geometry("800x500")
+        popup.transient(self.parent.winfo_toplevel())
+        popup.attributes("-topmost", True)
+        popup.lift()
+        popup.focus_force()
+        popup.after(300, lambda: popup.attributes("-topmost", False))
 
         fig, axs = plt.subplots(1,2, figsize=(10,4))
         fig.patch.set_facecolor("#e3e3e3")
