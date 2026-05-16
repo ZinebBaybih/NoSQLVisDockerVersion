@@ -74,6 +74,9 @@ def benchmark_mongodb(args):
         _, duration = timed_call(lambda: sum(item.get("count", 0) for item in backend.list_collections("benchmark")))
         record(args, db, "metadata_load", duration, records_returned=len(collections), total_records=total)
 
+        exact_total, duration = timed_call(lambda: sum(item.get("count", 0) for item in backend.list_collections("benchmark")))
+        record(args, db, "exact_statistics", duration, records_returned=len(collections), total_records=exact_total)
+
         users_total = next((item.get("count", 0) for item in collections if item.get("name") == "users"), "")
         for page_size in PAGE_SIZES_TO_TEST:
             docs, duration = timed_call(lambda size=page_size: backend.list_documents("benchmark", "users", offset=0, limit=size))
@@ -103,6 +106,9 @@ def benchmark_redis(args):
         total = meta.get("total_keys", db1_total)
         record(args, db, "metadata_load", duration, records_returned=meta.get("sampled_keys", ""), total_records=total)
 
+        exact_total, duration = timed_call(lambda: backend.client.client.dbsize())
+        record(args, db, "exact_statistics", duration, records_returned=1, total_records=exact_total)
+
         for page_size in PAGE_SIZES_TO_TEST:
             keys, duration = timed_call(lambda size=page_size: backend.list_keys(pattern="*", limit=size))
             record(args, db, "first_page", duration, page_size=page_size, page=1, records_returned=len(keys), total_records=total)
@@ -123,20 +129,22 @@ def benchmark_cassandra(args):
         tables, duration = timed_call(lambda: backend.list_tables("benchmark"))
         record(args, db, "scope_load", duration, records_returned=len(tables), total_records=len(tables))
 
-        counts, duration = timed_call(lambda: {table: backend.count_rows("benchmark", table) for table in tables})
-        total = sum(count for count in counts.values() if count != -1)
-        record(args, db, "metadata_load", duration, records_returned=len(counts), total_records=total)
+        metadata_tables, duration = timed_call(lambda: backend.list_tables("benchmark"))
+        record(args, db, "metadata_load", duration, records_returned=len(metadata_tables), total_records=len(metadata_tables))
 
-        users_total = counts.get("users", "")
+        users_total, duration = timed_call(lambda: backend.count_rows("benchmark", "users"))
+        record(args, db, "exact_statistics", duration, records_returned=1, total_records=users_total)
+
         for page_size in PAGE_SIZES_TO_TEST:
             rows, duration = timed_call(lambda size=page_size: backend.fetch_sample("benchmark", "users", limit=size))
-            record(args, db, "first_page", duration, page_size=page_size, page=1, records_returned=len(rows), total_records=users_total)
+            record(args, db, "first_page", duration, page_size=page_size, page=1, records_returned=len(rows), total_records=len(rows))
 
             rows, duration = timed_call(lambda size=page_size: backend.fetch_sample("benchmark", "users", limit=size * 2))
-            record(args, db, "next_page", duration, page_size=page_size, page=2, records_returned=max(0, len(rows) - page_size), total_records=users_total)
+            record(args, db, "next_page", duration, page_size=page_size, page=2, records_returned=max(0, len(rows) - page_size), total_records=len(rows))
 
-        _, duration = timed_call(lambda: {table: backend.count_rows("benchmark", table) for table in tables})
-        record(args, db, "graph_prepare", duration, records_returned=len(tables), total_records=total)
+        graph_counts, duration = timed_call(lambda: {table: backend.count_rows("benchmark", table) for table in tables})
+        graph_total = sum(count for count in graph_counts.values() if count != -1)
+        record(args, db, "graph_prepare", duration, records_returned=len(tables), total_records=graph_total)
     finally:
         backend.disconnect()
 
@@ -151,6 +159,9 @@ def benchmark_neo4j(args):
 
         _, duration = timed_call(backend.list_databases)
         record(args, db, "metadata_load", duration, records_returned=len(labels), total_records=user_total)
+
+        exact_total, duration = timed_call(lambda: sum(item.get("count", 0) for item in backend.list_databases()))
+        record(args, db, "exact_statistics", duration, records_returned=len(labels), total_records=exact_total)
 
         for page_size in PAGE_SIZES_TO_TEST:
             nodes, duration = timed_call(lambda size=page_size: backend.list_documents(None, "User", offset=0, limit=size))

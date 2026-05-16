@@ -8,7 +8,7 @@ import time
 from tksheet import Sheet
 from customtkinter import CTkTextbox
 
-from config import PAGE_SIZES, PREVIEW_LIMIT
+from config import PAGE_SIZES, PAGINATION_CACHE_LIMIT, PREVIEW_LIMIT
 from utils.benchmark_logger import is_gui_benchmark_enabled, log_metric
 
 
@@ -24,7 +24,7 @@ class RedisContentViewer(ctk.CTkFrame):
         self.actual_total_records = 0
         self.keys_cache = []
         self.cache_note = ""
-        self.cache_limit = max(PAGE_SIZES) * 20
+        self.cache_limit = PAGINATION_CACHE_LIMIT
 
         self.color_map = {
             "string": "#DCE9A0",
@@ -142,8 +142,8 @@ class RedisContentViewer(ctk.CTkFrame):
         summary_cards = [
             ("Database", "#2C2C2C"),
             ("Total Keys", "#18357E"),
-            ("Expiring", "#4EAFFA"),
-            ("Persistent", "#058484"),
+            ("Loaded Keys", "#4EAFFA"),
+            ("Key Types", "#058484"),
         ]
         self.summary_value_labels = {}
         for title, color in summary_cards:
@@ -323,6 +323,7 @@ class RedisContentViewer(ctk.CTkFrame):
         self.keys_sheet.set_sheet_data(data)
         self.apply_type_colors()
         self.export_btn.configure(state="normal" if data else "disabled")
+        self.update_loaded_key_stats(page_keys)
 
         start = offset + 1 if self.total_records else 0
         end = min(offset + len(page_keys), self.total_records)
@@ -429,8 +430,20 @@ class RedisContentViewer(ctk.CTkFrame):
     def update_stats(self, meta):
         self.summary_value_labels["Database"].configure(text="DB {}".format(self.selected_db_index))
         self.summary_value_labels["Total Keys"].configure(text=str(meta.get("total_keys")))
-        self.summary_value_labels["Expiring"].configure(text=str(meta.get("expiring_keys")))
-        self.summary_value_labels["Persistent"].configure(text=str(meta.get("persistent_keys")))
+        self.update_loaded_key_stats([])
+
+    def update_loaded_key_stats(self, loaded_keys):
+        if not hasattr(self, "summary_value_labels"):
+            return
+
+        loaded_count = len(loaded_keys)
+        key_types = {
+            key.get("type")
+            for key in loaded_keys
+            if key.get("type")
+        }
+        self.summary_value_labels["Loaded Keys"].configure(text=str(loaded_count))
+        self.summary_value_labels["Key Types"].configure(text=str(len(key_types)))
 
     def show_graphs_popup(self):
         start = time.perf_counter()
@@ -452,7 +465,11 @@ class RedisContentViewer(ctk.CTkFrame):
         fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
         fig.patch.set_facecolor("#FFFFFF")
 
-        type_data = self.current_meta.get("type_counts", {})
+        type_data = {}
+        for key in self.keys_cache:
+            key_type = key.get("type")
+            if key_type:
+                type_data[key_type] = type_data.get(key_type, 0) + 1
         type_labels = list(type_data.keys())
         type_values = list(type_data.values())
         type_colors = [self.color_map.get(k, "#999999") for k in type_labels]

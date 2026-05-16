@@ -119,7 +119,7 @@ class RedisConnector:
 
     def get_metadata(self, top_prefixes=None) -> Dict[str, Any]:
         """
-        Return basic metadata: total_keys, sampled_keys, type_counts.
+        Return basic metadata: total_keys and sampled top prefixes.
         Sampling limited by self.sample_limit to keep UI responsive.
         Also returns top key prefixes as a dict {prefix: count}.
         """
@@ -131,7 +131,6 @@ class RedisConnector:
         except Exception:
             total = None
 
-        type_counts = {}
         sampled = 0
         prefix_counter = Counter()
 
@@ -139,12 +138,6 @@ class RedisConnector:
             for key in self.client.scan_iter(match='*', count=100):
                 if sampled >= self.sample_limit:
                     break
-
-                # Count key types
-                ktype = self.client.type(key)
-                if isinstance(ktype, bytes):
-                    ktype = ktype.decode()
-                type_counts[ktype] = type_counts.get(ktype, 0) + 1
 
                 # Count prefixes
                 if isinstance(key, bytes):
@@ -160,17 +153,6 @@ class RedisConnector:
 
         # Additional Metadata
         info = self.client.info()
-        keys = self.client.keys("*")
-
-        # Count expiring & persistent keys
-        expiring = 0
-        persistent = 0
-        for k in keys:
-            ttl = self.client.ttl(k)
-            if ttl > 0:
-                expiring += 1
-            else:
-                persistent += 1
 
         # Return all prefixes if top_prefixes=None, otherwise top N
         if top_prefixes is None:
@@ -182,10 +164,7 @@ class RedisConnector:
         metadata = {
             "total_keys": total,
             "sampled_keys": sampled,
-            "type_counts": type_counts,
             "info": info,
-            "expiring_keys": expiring,
-            "persistent_keys": persistent,
             "memory_used": info.get("used_memory", 0),
             "uptime_seconds": info.get("uptime_in_seconds", 0),
             "top_prefixes": top_prefix_dict
@@ -202,29 +181,30 @@ class RedisConnector:
         if self.client is None:
             self.connect()
 
-        results = []
-        found = 0
+        keys = []
         try:
             for key in self.client.scan_iter(match=pattern, count=100):
-                if found >= limit:
+                if len(keys) >= limit:
                     break
+                keys.append(key)
 
-                ktype = self.client.type(key)
+            if not keys:
+                return []
+
+            pipe = self.client.pipeline(transaction=False)
+            for key in keys:
+                pipe.type(key)
+                pipe.ttl(key)
+                pipe.memory_usage(key)
+            responses = pipe.execute()
+
+            results = []
+            for index, key in enumerate(keys):
+                ktype, ttl, size = responses[index * 3: index * 3 + 3]
                 if isinstance(ktype, bytes):
                     ktype = ktype.decode()
 
-                try:
-                    ttl = self.client.ttl(key)
-                except Exception:
-                    ttl = None
-
-                try:
-                    size = self.client.memory_usage(key)  # fetch key size in bytes
-                except Exception:
-                    size = None
-
                 results.append({"key": key, "type": ktype, "ttl": ttl, "size": size})
-                found += 1
         except Exception as e:
             raise e
 
