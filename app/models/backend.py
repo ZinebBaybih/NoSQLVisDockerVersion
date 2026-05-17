@@ -79,6 +79,12 @@ class NoSQLBackend:
     def list_documents(self, db_name, col_name, *args, **kwargs):
         return self.client.list_documents(db_name, col_name, *args, **kwargs)
 
+    def get_indexed_search_fields(self, db_name, col_name, *args, **kwargs):
+        return self.client.get_indexed_search_fields(db_name, col_name, *args, **kwargs)
+
+    def search_indexed_documents(self, db_name, col_name, *args, **kwargs):
+        return self.client.search_indexed_documents(db_name, col_name, *args, **kwargs)
+
     def get_metadata(self):
         return self.client.get_metadata()
 
@@ -110,6 +116,12 @@ class NoSQLBackend:
 
     def search_table(self, keyspace, table, column, operator, value):
         return self.client.search_table(keyspace, table, column, operator, value)
+
+    def get_queryable_filter_columns(self, keyspace, table):
+        return self.client.get_queryable_filter_columns(keyspace, table)
+
+    def search_indexed_table(self, keyspace, table, column, value, *args, **kwargs):
+        return self.client.search_indexed_table(keyspace, table, column, value, *args, **kwargs)
 
     def count_rows(self, keyspace, table):
         return self.client.count_rows(keyspace, table)

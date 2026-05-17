@@ -54,3 +54,72 @@ class MongoConnector:
             .skip(int(offset))
             .limit(int(limit))
         )
+
+    def get_indexed_search_fields(self, db_name, col_name, max_depth=5):
+        fields = []
+        indexes = self.client[db_name][col_name].index_information()
+
+        for index in indexes.values():
+            keys = index.get("key", [])
+            if not keys:
+                continue
+
+            field, direction = keys[0]
+            if field == "_id" or len(field.split(".")) > int(max_depth):
+                continue
+            if direction not in (1, -1, "hashed"):
+                continue
+            if field not in fields:
+                fields.append(field)
+
+        return fields
+
+    def search_indexed_documents(self, db_name, col_name, value, offset=0, limit=PREVIEW_LIMIT):
+        fields = self.get_indexed_search_fields(db_name, col_name)
+        if not fields:
+            return [], 0, []
+
+        values = self._search_value_variants(value)
+        query = {
+            "$or": [
+                {field: variant}
+                for field in fields
+                for variant in values
+            ]
+        }
+
+        collection = self.client[db_name][col_name]
+        total = collection.count_documents(query)
+        docs = list(
+            collection
+            .find(query, {"_id": 0})
+            .skip(int(offset))
+            .limit(int(limit))
+        )
+        return docs, total, fields
+
+    def _search_value_variants(self, value):
+        raw_value = str(value).strip()
+        values = [raw_value]
+        lowered = raw_value.lower()
+
+        if lowered in ("true", "false"):
+            values.append(lowered == "true")
+
+        try:
+            int_value = int(raw_value)
+            values.append(int_value)
+        except ValueError:
+            pass
+
+        try:
+            float_value = float(raw_value)
+            values.append(float_value)
+        except ValueError:
+            pass
+
+        unique_values = []
+        for item in values:
+            if item not in unique_values:
+                unique_values.append(item)
+        return unique_values

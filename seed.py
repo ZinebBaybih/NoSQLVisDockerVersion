@@ -1532,10 +1532,14 @@ def seed_mongodb_large(size):
         if products_inserted % 10000 == 0 or products_inserted == size:
             print(_format_progress(products_inserted, size))
 
+    db.users.create_index("user_id")
+    db.products.create_index("product_id")
+
     user_count = db.users.count_documents({})
     product_count = db.products.count_documents({})
     print("   OK benchmark.users    : {:,} documents".format(user_count))
     print("   OK benchmark.products : {:,} documents".format(product_count))
+    print("   OK benchmark indexes  : users.user_id, products.product_id")
     client.close()
 
     return {

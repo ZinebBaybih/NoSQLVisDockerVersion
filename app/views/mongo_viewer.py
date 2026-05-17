@@ -23,22 +23,49 @@ class MongoContentViewer:
         self.total_records = 0
         self.current_db_name = None
         self.current_collection_name = None
+        self.current_collection_total = 0
         self.current_db_collections = []
+        self.indexed_search_fields = []
+        self.document_filter_mode = None
 
         # Nettoyage du parent
         for widget in parent.winfo_children():
             widget.destroy()
 
         # Barre de filtre
+        self.filter_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.filter_frame.pack(fill="x", padx=20, pady=(15, 10))
         self.filter_var = ctk.StringVar()
         self.filter_entry = ctk.CTkEntry(
-            parent,
+            self.filter_frame,
             placeholder_text="Rechercher / Filtrer...",
             textvariable=self.filter_var,
             height=34
         )
-        self.filter_entry.pack(fill="x", padx=20, pady=(15, 10))
+        self.filter_entry.pack(side="left", fill="x", expand=True)
         self.filter_var.trace("w", lambda *args: self.update_filter())
+        self.filter_btn = ctk.CTkButton(
+            self.filter_frame,
+            text="Filter",
+            width=80,
+            command=self.apply_filter,
+        )
+        self.filter_btn.pack(side="left", padx=(8, 0))
+        self.refresh_btn = ctk.CTkButton(
+            self.filter_frame,
+            text="Refresh",
+            width=85,
+            command=self.refresh_current_view,
+        )
+        self.refresh_btn.pack(side="left", padx=(6, 0))
+        self.filter_mode_label = ctk.CTkLabel(
+            self.filter_frame,
+            text="",
+            width=70,
+            anchor="w",
+            font=ctk.CTkFont(size=12),
+        )
+        self.filter_mode_label.pack(side="left", padx=(8, 0))
 
         self.summary_frame = ctk.CTkFrame(parent, fg_color="#FFFFFF")
         self.summary_frame.pack(fill="x", padx=20, pady=(0, 8))
@@ -185,6 +212,9 @@ class MongoContentViewer:
             self.render_documents_page()
 
     def update_filter(self):
+        if self.current_level == "documents":
+            return
+
         text = self.filter_var.get().lower()
         for frame in self.elements_frame.winfo_children():
             name = getattr(frame, "db_name", getattr(frame, "col_name", getattr(frame, "doc_name", "")))
@@ -192,6 +222,53 @@ class MongoContentViewer:
                 frame.pack(fill="x", pady=5)
             else:
                 frame.pack_forget()
+
+    def apply_filter(self):
+        if self.current_level != "documents":
+            self.update_filter()
+            return
+
+        text = self.filter_var.get().strip()
+        if not text:
+            self.refresh_current_view()
+            return
+
+        self.current_page = 1
+        self.document_filter_mode = "indexed" if self.indexed_search_fields else "preview"
+        self.set_filter_mode_label(self.document_filter_mode)
+        self.render_documents_page()
+
+    def refresh_current_view(self):
+        self.filter_var.set("")
+        self.document_filter_mode = None
+        self.set_filter_mode_label(None)
+
+        if self.current_level == "documents" and self.current_collection_name:
+            self.current_page = 1
+            self.total_records = int(self.current_collection_total)
+            self.render_documents_page()
+        else:
+            self.update_filter()
+
+    def set_filter_mode_label(self, mode):
+        if mode == "indexed":
+            self.filter_mode_label.configure(text="Indexed", text_color="#2E8B57")
+        elif mode == "preview":
+            self.filter_mode_label.configure(text="No index", text_color="#8A6A00")
+        else:
+            self.filter_mode_label.configure(text="", text_color="#1e1e1e")
+
+    def apply_preview_text_filter(self, text):
+        needle = text.lower()
+        matches = 0
+        for frame in self.elements_frame.winfo_children():
+            name = getattr(frame, "doc_name", "")
+            if needle in name.lower():
+                frame.pack(fill="x", pady=4, padx=6)
+                matches += 1
+            else:
+                frame.pack_forget()
+        return matches
 
     def flatten_dict(self, d, parent_key='', sep='.'):
         """Aplatit les sous-documents pour le CSV."""
@@ -219,6 +296,9 @@ class MongoContentViewer:
             self.history.clear()
             self.current_level = "dbs"
             self.opened_db_btn_frame = None
+            self.indexed_search_fields = []
+            self.document_filter_mode = None
+            self.set_filter_mode_label(None)
 
             try:
                 dbs = self.backend.list_databases()
@@ -237,7 +317,7 @@ class MongoContentViewer:
         self.summary_cards["Total Documents"].configure(text=str(total_docs) if db_name else "--")
         self.summary_cards["Selected Collection"].configure(text=selected_collection or "--")
         if db_name:
-            self.summary_frame.pack(fill="x", padx=20, pady=(0, 8), before=self.filter_entry)
+            self.summary_frame.pack(fill="x", padx=20, pady=(0, 8), before=self.filter_frame)
         else:
             self.summary_frame.pack_forget()
 
@@ -305,6 +385,9 @@ class MongoContentViewer:
             self.preview_label.pack_forget()
             self.page_size_frame.pack_forget()
             self.pagination_frame.pack_forget()
+            self.indexed_search_fields = []
+            self.document_filter_mode = None
+            self.set_filter_mode_label(None)
             self.current_level = "collections"
             self.history.append(("dbs", None))
             self.back_btn.pack(pady=5, anchor="w")
@@ -400,6 +483,15 @@ class MongoContentViewer:
         self.back_btn.pack(pady=5, anchor="w")
         self.current_db_name = db_name
         self.current_collection_name = col_name
+        self.current_collection_total = int(total_count)
+        self.filter_var.set("")
+        try:
+            self.indexed_search_fields = self.backend.get_indexed_search_fields(db_name, col_name)
+        except Exception as e:
+            print("Erreur get_indexed_search_fields:", e)
+            self.indexed_search_fields = []
+        self.document_filter_mode = None
+        self.set_filter_mode_label(None)
         total_docs = sum(col.get("count", 0) for col in self.current_db_collections)
         self.update_summary(
             db_name=db_name,
@@ -421,21 +513,35 @@ class MongoContentViewer:
             self.clear_elements()
             offset = (self.current_page - 1) * self.current_page_size
             try:
-                docs = self.backend.list_documents(
-                    self.current_db_name,
-                    self.current_collection_name,
-                    offset=offset,
-                    limit=self.current_page_size,
-                )
+                if self.document_filter_mode == "indexed":
+                    docs, filtered_total, _fields = self.backend.search_indexed_documents(
+                        self.current_db_name,
+                        self.current_collection_name,
+                        self.filter_var.get(),
+                        offset=offset,
+                        limit=self.current_page_size,
+                    )
+                    self.total_records = int(filtered_total)
+                    if self.total_records == 0:
+                        self.document_filter_mode = "preview"
+                        self.set_filter_mode_label("preview")
+                        self.total_records = int(self.current_collection_total)
+                        docs = self.backend.list_documents(
+                            self.current_db_name,
+                            self.current_collection_name,
+                            offset=offset,
+                            limit=self.current_page_size,
+                        )
+                else:
+                    docs = self.backend.list_documents(
+                        self.current_db_name,
+                        self.current_collection_name,
+                        offset=offset,
+                        limit=self.current_page_size,
+                    )
             except Exception as e:
                 print("Erreur list_documents:", e)
                 docs = []
-
-            start = offset + 1 if self.total_records else 0
-            end = min(offset + len(docs), self.total_records)
-            self.preview_label.configure(
-                text="Showing {}-{} of {} documents".format(start, end, self.total_records)
-            )
 
             for doc in docs:
                 frame = ctk.CTkFrame(self.elements_frame, fg_color="#e3e3e3", corner_radius=10)
@@ -450,6 +556,18 @@ class MongoContentViewer:
                 )
                 label.pack(side="left", padx=10, pady=6)
                 frame.doc_name = str(doc)
+
+            display_start = offset + 1 if self.total_records else 0
+            display_end = min(offset + len(docs), self.total_records)
+            if self.document_filter_mode == "preview":
+                matches = self.apply_preview_text_filter(self.filter_var.get())
+                self.preview_label.configure(
+                    text="No index: {} matching visible documents".format(matches)
+                )
+            else:
+                self.preview_label.configure(
+                    text="Showing {}-{} of {} documents".format(display_start, display_end, self.total_records)
+                )
 
             self.update_pagination_controls()
         except Exception as exc:

@@ -185,6 +185,15 @@ class CassandraContentViewer(ctk.CTkFrame):
         self.search_btn = ctk.CTkButton(self.search_frame, text="Search", command=self.search_table)
         self.search_btn.pack(side="left", padx=5)
 
+        self.filter_mode_label = ctk.CTkLabel(
+            self.search_frame,
+            text="",
+            width=70,
+            anchor="w",
+            font=("Arial", 12),
+        )
+        self.filter_mode_label.pack(side="left", padx=(4, 0))
+
         ctk.CTkLabel(self.search_frame, text="Page size:").pack(side="left", padx=(16, 5))
         self.page_size_dropdown = ctk.CTkComboBox(
             self.search_frame,
@@ -386,6 +395,7 @@ class CassandraContentViewer(ctk.CTkFrame):
             self.current_table = value
             self.total_records = 0
             self.exact_total_records = None
+            self.set_filter_mode_label(None)
             self.load_rows_cache()
             self.current_page = 1
             self.current_page_size = int(self.page_size_var.get())
@@ -413,6 +423,7 @@ class CassandraContentViewer(ctk.CTkFrame):
             return
 
         try:
+            self.set_filter_mode_label(None)
             offset = (self.current_page - 1) * self.current_page_size
 
             # Cassandra CQL has no native OFFSET. We cache a bounded preview once,
@@ -559,6 +570,22 @@ class CassandraContentViewer(ctk.CTkFrame):
             messagebox.showinfo("Info", "Please select a visible column")
             return
 
+        if operator == "=" and self.can_use_native_filter(keyspace, table, column):
+            try:
+                results, _queryable_columns = self.backend.search_indexed_table(
+                    keyspace,
+                    table,
+                    column,
+                    value,
+                    limit=self.cache_limit,
+                )
+                self.set_filter_mode_label("indexed")
+                self.render_search_results(results)
+                return
+            except Exception as e:
+                print("Erreur search_indexed_table:", e)
+
+        self.set_filter_mode_label("preview")
         rows = self.sheet.get_sheet_data()
         col_index = headers.index(column)
 
@@ -596,12 +623,31 @@ class CassandraContentViewer(ctk.CTkFrame):
             if col_index < len(row) and compare(row[col_index])
         ]
 
+        self.render_search_results(results)
+        return
+
+    def can_use_native_filter(self, keyspace, table, column):
+        try:
+            return column in self.backend.get_queryable_filter_columns(keyspace, table)
+        except Exception as e:
+            print("Erreur get_queryable_filter_columns:", e)
+            return False
+
+    def set_filter_mode_label(self, mode):
+        if mode == "indexed":
+            self.filter_mode_label.configure(text="Indexed", text_color="#2E8B57")
+        elif mode == "preview":
+            self.filter_mode_label.configure(text="No index", text_color="#8A6A00")
+        else:
+            self.filter_mode_label.configure(text="", text_color="#1e1e1e")
+
+    def render_search_results(self, results):
         if not results:
             self.sheet.set_sheet_data([])
             self.export_btn.configure(state="disabled")
             self.loaded_rows = 0
             self.loaded_rows_label.configure(text="0")
-            self.preview_label.configure(text="Filter current preview: 0 matching rows")
+            self.preview_label.configure(text="Filter result: 0 matching rows")
             return
 
     # Convert list of dicts → headers + rows
@@ -612,7 +658,7 @@ class CassandraContentViewer(ctk.CTkFrame):
         self.sheet.set_sheet_data(rows)
         self.loaded_rows = len(rows)
         self.preview_label.configure(
-            text="Filter current preview: {} matching rows".format(len(rows))
+            text="Filter result: {} matching rows".format(len(rows))
         )
         self.loaded_rows_label.configure(text=str(self.loaded_rows))
 

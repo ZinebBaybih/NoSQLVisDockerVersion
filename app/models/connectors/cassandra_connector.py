@@ -118,6 +118,41 @@ class CassandraConnector:
         rows = self.session.execute(f"SELECT * FROM {keyspace}.{table}")
         return [dict(row._asdict()) for row in rows]
 
+    def get_queryable_filter_columns(self, keyspace, table):
+        table_meta = self._get_table_metadata(keyspace, table)
+        if not table_meta:
+            return []
+
+        columns = []
+        partition_key = getattr(table_meta, "partition_key", [])
+        if len(partition_key) == 1:
+            columns.append(partition_key[0].name)
+
+        for index in getattr(table_meta, "indexes", {}).values():
+            target = getattr(index, "index_options", {}).get("target", "")
+            target = target.strip().strip('"')
+            if target and "(" not in target and target not in columns:
+                columns.append(target)
+
+        return columns
+
+    def search_indexed_table(self, keyspace, table, column, value, limit=PREVIEW_LIMIT):
+        queryable_columns = self.get_queryable_filter_columns(keyspace, table)
+        if column not in queryable_columns:
+            return [], queryable_columns
+
+        typed_value = self._convert_column_value(keyspace, table, column, value)
+        rows = self.session.execute(
+            "SELECT * FROM {}.{} WHERE {} = %s LIMIT {}".format(
+                self._quote_identifier(keyspace),
+                self._quote_identifier(table),
+                self._quote_identifier(column),
+                int(limit),
+            ),
+            (typed_value,),
+        )
+        return [dict(row._asdict()) for row in rows], queryable_columns
+
     def search_table(self, keyspace, table, column, operator, value):
         rows = self.fetch_all(keyspace, table)
         raw_value = str(value).strip().lower()
@@ -157,3 +192,32 @@ class CassandraConnector:
             if column in row and compare(row[column]):
                 results.append(row)
         return results
+
+    def _get_table_metadata(self, keyspace, table):
+        if not self.cluster:
+            return None
+        keyspace_meta = self.cluster.metadata.keyspaces.get(keyspace)
+        if not keyspace_meta:
+            return None
+        return keyspace_meta.tables.get(table)
+
+    def _convert_column_value(self, keyspace, table, column, value):
+        table_meta = self._get_table_metadata(keyspace, table)
+        column_meta = None
+        if table_meta:
+            column_meta = table_meta.columns.get(column)
+        column_type = str(getattr(column_meta, "cql_type", "") or getattr(column_meta, "typestring", "")).lower()
+        raw_value = str(value).strip()
+
+        if column_type in ("int", "smallint", "tinyint"):
+            return int(raw_value)
+        if column_type == "bigint":
+            return int(raw_value)
+        if column_type in ("float", "double", "decimal"):
+            return float(raw_value)
+        if column_type == "boolean":
+            return raw_value.lower() == "true"
+        return raw_value
+
+    def _quote_identifier(self, identifier):
+        return '"{}"'.format(str(identifier).replace('"', '""'))
