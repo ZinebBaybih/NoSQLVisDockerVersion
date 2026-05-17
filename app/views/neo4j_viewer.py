@@ -23,33 +23,38 @@ class Neo4jContentViewer(ctk.CTkFrame):
         self.current_page = 1
         self.current_page_size = PREVIEW_LIMIT
         self.total_records = 0
+        self.label_properties = []
+        self.indexed_filter_properties = []
+        self.filter_mode = None
+        self.graph_metadata = {}
+        self.selected_database_summary = "--"
 
         self.pack(fill="both", expand=True, padx=10, pady=10)
 
-        header = ctk.CTkLabel(self, text="Neo4j Content Viewer", font=("Arial", 22, "bold"), fg_color="#ffffff", text_color="#191919")
-        header.pack(pady=10)
+        self.summary_frame = ctk.CTkFrame(self, fg_color="#FFFFFF")
+        self.summary_frame.pack(fill="x", pady=(0, 8))
+        self.summary_cards = {}
+        for title, color in [
+            ("Labels", "#2C2C2C"),
+            ("Total Nodes", "#18357E"),
+            ("Relationships", "#4EAFFA"),
+            ("Selected", "#058484"),
+        ]:
+            card = ctk.CTkFrame(self.summary_frame, fg_color=color, corner_radius=10)
+            card.pack(side="left", expand=True, fill="both", padx=6)
+            ctk.CTkLabel(card, text=title, font=("Arial", 12), text_color="white").pack(pady=(6, 0))
+            value = ctk.CTkLabel(card, text="--", font=("Arial", 16, "bold"), text_color="white")
+            value.pack(pady=(0, 10))
+            self.summary_cards[title] = value
 
-        # ---------------- Label Section ----------------
-        label_frame = ctk.CTkFrame(self, corner_radius=10, fg_color="#ffffff")
-        label_frame.pack(fill="x", pady=10)
-
-        ctk.CTkLabel(label_frame, text="Available Databases", font=("Arial", 16, "bold"), text_color="#191919").pack(
-            side="left", padx=10, pady=5
-        )
-
-        self.refresh_btn = ctk.CTkButton(
-            label_frame, text="Refresh", command=self.show_labels, width=100
-        )
-        self.refresh_btn.pack(side="right", padx=10, pady=5)
-
-        # Table for labels
+        # Table for databases / labels
         self.labels_tree = ttk.Treeview(
             self,
             columns=("label", "nodes", "rels"),
             show="headings",
             height=8
         )
-        self.labels_tree.heading("label", text="Label")
+        self.labels_tree.heading("label", text="Database")
         self.labels_tree.heading("nodes", text="Nodes Count")
         self.labels_tree.heading("rels", text="Relations Count")
 
@@ -69,20 +74,66 @@ class Neo4jContentViewer(ctk.CTkFrame):
         self.graph_btn = ctk.CTkButton(btn_frame, text="Graph", command=self.show_graph, state="disabled")
         self.graph_btn.pack(side="left", padx=10)
 
-        self.back_btn = ctk.CTkButton(btn_frame, text="⬅ Back", command=self.go_back, state="disabled")
-        self.back_btn.pack(side="left", padx=10)
+        self.graph_note_label = ctk.CTkLabel(
+            btn_frame,
+            text="Graph preview - sampled 2-hop neighborhood, up to {} relationships shown".format(NEO4J_GRAPH_PREVIEW_LIMIT),
+            anchor="w",
+            font=("Arial", 12)
+        )
+        self.graph_note_label.pack(side="left", padx=10)
 
         self.page_size_frame = ctk.CTkFrame(self, fg_color="#ffffff")
         self.page_size_frame.pack_forget()
         self.page_size_var = ctk.StringVar(value=str(PREVIEW_LIMIT))
 
-        self.graph_note_label = ctk.CTkLabel(
-            self,
-            text="Graph preview - sampled 2-hop neighborhood, up to {} relationships shown".format(NEO4J_GRAPH_PREVIEW_LIMIT),
-            anchor="w",
-            font=("Arial", 12)
+        self.filter_frame = ctk.CTkFrame(self, fg_color="#ffffff")
+        self.filter_frame.pack(fill="x", pady=(0, 6))
+
+        ctk.CTkLabel(self.filter_frame, text="Property:").pack(side="left", padx=(0, 5))
+        self.filter_property_var = ctk.StringVar()
+        self.filter_property_dropdown = ctk.CTkComboBox(
+            self.filter_frame,
+            values=[],
+            variable=self.filter_property_var,
+            width=160,
+            state="disabled",
         )
-        self.graph_note_label.pack(fill="x", pady=(0, 6))
+        self.filter_property_dropdown.pack(side="left", padx=5)
+
+        self.filter_value_entry = ctk.CTkEntry(
+            self.filter_frame,
+            placeholder_text="Value",
+            width=180,
+            state="disabled",
+        )
+        self.filter_value_entry.pack(side="left", padx=5)
+
+        self.search_btn = ctk.CTkButton(
+            self.filter_frame,
+            text="Search",
+            width=80,
+            command=self.apply_filter,
+            state="disabled",
+        )
+        self.search_btn.pack(side="left", padx=5)
+
+        self.refresh_btn = ctk.CTkButton(
+            self.filter_frame,
+            text="Refresh",
+            width=85,
+            command=self.refresh_current_view,
+            state="disabled",
+        )
+        self.refresh_btn.pack(side="left", padx=5)
+
+        self.filter_mode_label = ctk.CTkLabel(
+            self.filter_frame,
+            text="",
+            width=70,
+            anchor="w",
+            font=("Arial", 12),
+        )
+        self.filter_mode_label.pack(side="left", padx=(4, 0))
 
         self.node_controls_frame = ctk.CTkFrame(self, fg_color="#ffffff")
         self.node_controls_frame.pack(fill="x", pady=(0, 4))
@@ -141,6 +192,17 @@ class Neo4jContentViewer(ctk.CTkFrame):
             error=error,
         )
 
+    def update_summary(self, metadata=None, selected_summary=None):
+        if metadata is not None:
+            self.graph_metadata = metadata
+        if selected_summary is not None:
+            self.selected_database_summary = selected_summary
+        metadata = self.graph_metadata
+        self.summary_cards["Labels"].configure(text=str(metadata.get("labels", "--")))
+        self.summary_cards["Total Nodes"].configure(text=str(metadata.get("nodes", "--")))
+        self.summary_cards["Relationships"].configure(text=str(metadata.get("relationships", "--")))
+        self.summary_cards["Selected"].configure(text=str(self.selected_database_summary))
+
     def show_labels(self):
         """Fetch and display label statistics (nodes + relations)."""
         start = time.perf_counter()
@@ -153,6 +215,13 @@ class Neo4jContentViewer(ctk.CTkFrame):
             self.label_counts = {}
 
             try:
+                try:
+                    metadata = self.backend.client.get_metadata()
+                    self.update_summary(metadata)
+                except Exception as e:
+                    print("Erreur get_metadata:", e)
+                    self.update_summary()
+
                 labels = self.backend.client.list_databases()
                 records_returned = len(labels)
 
@@ -194,14 +263,22 @@ class Neo4jContentViewer(ctk.CTkFrame):
         values = self.labels_tree.item(selected, "values")
         self.selected_label = values[0]
         self.selected_total_nodes = self.label_counts.get(self.selected_label, int(values[1]))
+        selected_relationships = values[2] if len(values) > 2 else "--"
         self.total_records = self.selected_total_nodes
         self.current_page = 1
         self.current_page_size = int(self.page_size_var.get())
+        self.filter_mode = None
+        self.filter_value_entry.configure(state="normal")
+        self.filter_value_entry.delete(0, "end")
+        self.set_filter_mode_label(None)
+        self.update_summary(
+            selected_summary="{}/{}".format(self.selected_total_nodes, selected_relationships)
+        )
+        self.load_filter_properties()
         self.render_nodes_page()
 
         self.export_btn.configure(state="normal")
         self.graph_btn.configure(state="normal")
-        self.back_btn.configure(state="normal")
 
     def display_nodes(self, nodes):
         """Display nodes in treeview."""
@@ -210,7 +287,8 @@ class Neo4jContentViewer(ctk.CTkFrame):
         self.nodes_tree.delete(*self.nodes_tree.get_children())
 
         if not nodes:
-            messagebox.showinfo("Info", "Aucun nœud trouvé pour ce label.")
+            self.preview_label.configure(text="Filter result: 0 matching nodes")
+            self.update_pagination_controls()
             return
 
         columns = sorted({k for n in nodes for k in n.keys()})
@@ -227,10 +305,73 @@ class Neo4jContentViewer(ctk.CTkFrame):
         start = offset + 1 if self.total_records else 0
         end = min(offset + len(nodes), self.total_records)
         self.preview_label.configure(
-            text="Showing {}-{} of {} nodes".format(start, end, self.selected_total_nodes)
+            text="Showing {}-{} of {} nodes".format(start, end, self.total_records)
         )
 
         self.update_pagination_controls()
+
+    def load_filter_properties(self):
+        try:
+            self.label_properties = self.backend.client.get_label_properties(self.selected_label)
+        except Exception as e:
+            print("Erreur get_label_properties:", e)
+            self.label_properties = []
+
+        try:
+            self.indexed_filter_properties = self.backend.client.get_indexed_filter_properties(self.selected_label)
+        except Exception as e:
+            print("Erreur get_indexed_filter_properties:", e)
+            self.indexed_filter_properties = []
+
+        self.filter_property_dropdown.configure(values=self.label_properties)
+        if self.label_properties:
+            self.filter_property_var.set(self.label_properties[0])
+            state = "normal"
+        else:
+            self.filter_property_var.set("")
+            state = "disabled"
+
+        self.filter_property_dropdown.configure(state=state)
+        self.filter_value_entry.configure(state=state)
+        self.search_btn.configure(state=state)
+        self.refresh_btn.configure(state=state)
+
+    def apply_filter(self):
+        if not self.selected_label:
+            return
+
+        property_name = self.filter_property_var.get().strip()
+        value = self.filter_value_entry.get().strip()
+        if not property_name or not value:
+            messagebox.showinfo("Info", "Please select a property and enter a value")
+            return
+
+        self.current_page = 1
+        if property_name in self.indexed_filter_properties:
+            self.filter_mode = "indexed"
+            self.set_filter_mode_label("indexed")
+        else:
+            self.filter_mode = "preview"
+            self.set_filter_mode_label("preview")
+        self.render_nodes_page()
+
+    def refresh_current_view(self):
+        self.filter_value_entry.delete(0, "end")
+        self.filter_mode = None
+        self.set_filter_mode_label(None)
+        self.total_records = self.selected_total_nodes
+        self.current_page = 1
+        if self.selected_label:
+            self.load_filter_properties()
+            self.render_nodes_page()
+
+    def set_filter_mode_label(self, mode):
+        if mode == "indexed":
+            self.filter_mode_label.configure(text="Indexed", text_color="#2E8B57")
+        elif mode == "preview":
+            self.filter_mode_label.configure(text="No index", text_color="#8A6A00")
+        else:
+            self.filter_mode_label.configure(text="", text_color="#1e1e1e")
 
     def render_nodes_page(self):
         start = time.perf_counter()
@@ -238,13 +379,31 @@ class Neo4jContentViewer(ctk.CTkFrame):
         self.set_loading("Loading Neo4j nodes...")
         try:
             try:
-                nodes = self.backend.client.list_documents(
-                    None,
-                    self.selected_label,
-                    offset=(self.current_page - 1) * self.current_page_size,
-                    limit=self.current_page_size,
-                )
+                offset = (self.current_page - 1) * self.current_page_size
+                if self.filter_mode == "indexed":
+                    nodes, filtered_total, _fields = self.backend.client.search_indexed_nodes(
+                        self.selected_label,
+                        self.filter_property_var.get(),
+                        self.filter_value_entry.get(),
+                        offset=offset,
+                        limit=self.current_page_size,
+                    )
+                    self.total_records = int(filtered_total)
+                else:
+                    self.total_records = self.selected_total_nodes
+                    nodes = self.backend.client.list_documents(
+                        None,
+                        self.selected_label,
+                        offset=offset,
+                        limit=self.current_page_size,
+                    )
+                    if self.filter_mode == "preview":
+                        nodes = self.filter_visible_nodes(nodes)
                 self.display_nodes(nodes)
+                if self.filter_mode == "preview":
+                    self.preview_label.configure(
+                        text="No index: {} matching visible nodes".format(len(nodes))
+                    )
             except Exception as e:
                 messagebox.showerror("Erreur", f"Erreur list_documents: {e}")
         finally:
@@ -257,6 +416,38 @@ class Neo4jContentViewer(ctk.CTkFrame):
                 total_records=self.total_records,
             )
             self.clear_loading()
+
+    def filter_visible_nodes(self, nodes):
+        property_name = self.filter_property_var.get()
+        values = self.search_value_variants(self.filter_value_entry.get())
+        return [
+            node for node in nodes
+            if property_name in node and node.get(property_name) in values
+        ]
+
+    def search_value_variants(self, value):
+        raw_value = str(value).strip()
+        values = [raw_value]
+        lowered = raw_value.lower()
+
+        if lowered in ("true", "false"):
+            values.append(lowered == "true")
+
+        try:
+            values.append(int(raw_value))
+        except ValueError:
+            pass
+
+        try:
+            values.append(float(raw_value))
+        except ValueError:
+            pass
+
+        unique_values = []
+        for item in values:
+            if item not in unique_values:
+                unique_values.append(item)
+        return unique_values
 
     def update_pagination_controls(self):
         if not self.selected_label or self.total_records <= 0:
@@ -298,12 +489,24 @@ class Neo4jContentViewer(ctk.CTkFrame):
         if not self.selected_label:
             return
         try:
-            nodes = self.backend.client.list_documents(
-                None,
-                self.selected_label,
-                offset=(self.current_page - 1) * self.current_page_size,
-                limit=self.current_page_size,
-            )
+            offset = (self.current_page - 1) * self.current_page_size
+            if self.filter_mode == "indexed":
+                nodes, _total, _fields = self.backend.client.search_indexed_nodes(
+                    self.selected_label,
+                    self.filter_property_var.get(),
+                    self.filter_value_entry.get(),
+                    offset=offset,
+                    limit=self.current_page_size,
+                )
+            else:
+                nodes = self.backend.client.list_documents(
+                    None,
+                    self.selected_label,
+                    offset=offset,
+                    limit=self.current_page_size,
+                )
+                if self.filter_mode == "preview":
+                    nodes = self.filter_visible_nodes(nodes)
             if not nodes:
                 messagebox.showinfo("Info", "Aucune donnée à exporter.")
                 return
@@ -431,16 +634,3 @@ class Neo4jContentViewer(ctk.CTkFrame):
         except Exception as e:
             messagebox.showerror("Erreur", f"Erreur show_graph: {e}")
 
-
-    def go_back(self):
-        self.selected_label = None
-        self.selected_total_nodes = 0
-        self.total_records = 0
-        self.current_page = 1
-        self.nodes_tree.delete(*self.nodes_tree.get_children())
-        self.preview_label.configure(text="")
-        self.page_size_frame.pack_forget()
-        self.pagination_frame.pack_forget()
-        self.export_btn.configure(state="disabled")
-        self.graph_btn.configure(state="disabled")
-        self.back_btn.configure(state="disabled")
