@@ -39,7 +39,7 @@ For all installation modes:
 
 For running the app directly from Python:
 
-- Python 3.9 or newer
+- Python 3.13 or newer (The current project environment was tested with Python 3.13.1)
 - A virtual environment is recommended
 
 Neo4j demo credentials:
