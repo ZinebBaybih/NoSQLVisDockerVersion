@@ -607,12 +607,12 @@ class MongoContentViewer:
         except Exception as e:
             print("Erreur graph Collection:", e)
             return
-        self.show_graph_popup(f"Collection: {col_name}", labels, values, "Champs", "Occurrences")
+        self.show_graph_popup(f"Collection: {col_name}", labels, values, "Fields", "Occurrences")
 
     def show_graph_popup(self, title, labels, values, xlabel, ylabel):
         start = time.perf_counter()
         if not labels:
-            self.show_custom_popup("Aucune donnée à afficher", fg_color="#444")
+            self.show_custom_popup("No data to display", fg_color="#444")
             return
         popup = ctk.CTkToplevel(self.parent)
         popup.title(title)
@@ -627,14 +627,14 @@ class MongoContentViewer:
         fig.patch.set_facecolor("#e3e3e3")
 
         axs[0].bar(labels, values, color="#4fa3ff")
-        axs[0].set_title("Diagramme en barres", color="#1e1e1e")
+        axs[0].set_title("Bar chart", color="#1e1e1e")
         axs[0].set_xlabel(xlabel, color="#1e1e1e")
         axs[0].set_ylabel(ylabel, color="#1e1e1e")
         axs[0].tick_params(axis='x', rotation=45, colors="#1e1e1e")
         axs[0].tick_params(axis='y', colors="#1e1e1e")
 
         axs[1].pie(values, labels=labels, autopct="%1.1f%%", colors=plt.cm.Paired.colors)
-        axs[1].set_title("Diagramme circulaire")
+        axs[1].set_title("Pie chart")
 
         for ax in axs:
             ax.set_facecolor("#e3e3e3")
@@ -644,7 +644,7 @@ class MongoContentViewer:
         canvas = FigureCanvasTkAgg(fig, master=popup)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
-        ctk.CTkButton(popup, text="Fermer", command=popup.destroy).pack(pady=10)
+        ctk.CTkButton(popup, text="Close", command=popup.destroy).pack(pady=10)
         plt.close(fig)
         self.log_gui_metric("graph_prepare", start, records_returned=len(labels))
 
